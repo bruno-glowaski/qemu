@@ -49,6 +49,9 @@ if have_vhost
     system_virtio_ss.add(files('vhost-shadow-virtqueue.c'))
   endif
 endif
+
+system_virtio_ss.add(files('virtio-hyperpipe.c'))
+
 system_virtio_ss.add(when: 'CONFIG_VHOST_USER_VSOCK', if_true: files('vhost-user-vsock.c'))
 system_virtio_ss.add(when: 'CONFIG_VIRTIO_RNG', if_true: files('virtio-rng.c'))
 
