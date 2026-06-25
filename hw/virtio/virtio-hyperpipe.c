@@ -3,11 +3,14 @@
 #include "hw/virtio/vhost.h"
 #include "hw/virtio/virtio.h"
 #include "hw/virtio/virtio-pci.h"
+#include "standard-headers/linux/virtio_ids.h"
 
 #define TYPE_VIRTIO_HYPERPIPE "virtio-hyperpipe"
+#define TYPE_VIRTIO_HYPERPIPE_PCI "virtio-hyperpipe-pci"
 #define VIRTIO_HYPERPIPE(obj)                                                  \
   OBJECT_CHECK(VirtIOHyperpipe, obj, TYPE_VIRTIO_HYPERPIPE)
-#define VIRTIO_ID_HYPERPIPE 74
+#define VIRTIO_HYPERPIPE_PCI(obj)                                              \
+  OBJECT_CHECK(VirtIOHyperpipePCI, obj, TYPE_VIRTIO_HYPERPIPE_PCI)
 
 struct virtio_hyperpipe_config {
   uint32_t queue_size;
@@ -56,6 +59,12 @@ static void virtio_hyperpipe_device_unrealize(DeviceState *dev) {
   virtio_cleanup(vdev);
 }
 
+static uint64_t virtio_hyperpipe_get_features(VirtIODevice *vdev,
+                                              uint64_t requested_features,
+                                              Error **errp) {
+  return requested_features;
+}
+
 static void virtio_hyperpipe_instance_init(Object *obj) {}
 
 static void virtio_hyperpipe_class_init(ObjectClass *klass, const void *data) {
@@ -67,6 +76,7 @@ static void virtio_hyperpipe_class_init(ObjectClass *klass, const void *data) {
   set_bit(DEVICE_CATEGORY_MISC, dc->categories);
   vdc->realize = virtio_hyperpipe_realize;
   vdc->unrealize = virtio_hyperpipe_device_unrealize;
+  vdc->get_features = virtio_hyperpipe_get_features;
 }
 
 static const TypeInfo virtio_hyperpipe_info = {
@@ -83,26 +93,35 @@ static void virtio_hyperpipe_pci_realize(VirtIOPCIProxy *vpci_dev,
       container_of(vpci_dev, VirtIOHyperpipePCI, parent_obj);
   DeviceState *vdev = DEVICE(&dev->vdev);
 
-  // This forces your device onto the internal virtio-bus created by the PCI
-  // proxy
+  virtio_pci_force_virtio_1(vpci_dev);
   qdev_realize(vdev, BUS(&vpci_dev->bus), errp);
+}
+
+static void virtio_hyperpipe_pci_instance_init(Object *obj) {
+  VirtIOHyperpipePCI *dev = VIRTIO_HYPERPIPE_PCI(obj);
+
+  virtio_instance_init_common(obj, &dev->vdev, sizeof(dev->vdev),
+                              TYPE_VIRTIO_HYPERPIPE);
 }
 
 static void virtio_hyperpipe_pci_class_init(ObjectClass *klass,
                                             const void *data) {
   DeviceClass *dc = DEVICE_CLASS(klass);
   VirtioPCIClass *k = VIRTIO_PCI_CLASS(klass);
-
+  PCIDeviceClass *pcidev_k = PCI_DEVICE_CLASS(klass);
   k->realize = virtio_hyperpipe_pci_realize;
   set_bit(DEVICE_CATEGORY_MISC, dc->categories);
+  pcidev_k->revision = VIRTIO_PCI_ABI_VERSION;
+  pcidev_k->class_id = PCI_CLASS_OTHERS;
+  dc->hotpluggable = false;
 }
 
 static const TypeInfo virtio_hyperpipe_pci_info = {
-    .name = "virtio-hyperpipe-pci",
+    .name = TYPE_VIRTIO_HYPERPIPE_PCI,
     .parent = TYPE_VIRTIO_PCI,
     .instance_size = sizeof(VirtIOHyperpipePCI),
     .class_init = virtio_hyperpipe_pci_class_init,
-
+    .instance_init = virtio_hyperpipe_pci_instance_init,
     .interfaces = (InterfaceInfo[]){{INTERFACE_PCIE_DEVICE}, {}}};
 
 static void virtio_hyperpipe_type_init(void) {
