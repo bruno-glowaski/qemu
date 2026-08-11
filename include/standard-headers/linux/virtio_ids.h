@@ -69,7 +69,7 @@
 #define VIRTIO_ID_BT 40             /* virtio bluetooth */
 #define VIRTIO_ID_GPIO 41           /* virtio gpio */
 #define VIRTIO_ID_SPI 45            /* virtio spi */
-#define VIRTIO_ID_HYPERPIPE 74
+#define VIRTIO_ID_ECHO 74
 
 /*
  * Virtio Transitional IDs
