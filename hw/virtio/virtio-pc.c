@@ -1,16 +1,14 @@
 #include "qemu/osdep.h"
+
 #include "hw/core/qdev.h"
 #include "hw/virtio/vhost.h"
 #include "hw/virtio/virtio.h"
 #include "hw/virtio/virtio-pci.h"
-#include "qemu/typedefs.h"
 #include "standard-headers/linux/virtio_config.h"
 #include "standard-headers/linux/virtio_ids.h"
-#include <stddef.h>
-#include <stdint.h>
 
-#define TYPE_VIRTIO_PC_CONSUMER "virtio-pc-consumer"
-#define TYPE_VIRTIO_PC_CONSUMER_PCI "virtio-pc-consumer-pci"
+#define TYPE_VIRTIO_PC_CONSUMER "virtio-pc"
+#define TYPE_VIRTIO_PC_CONSUMER_PCI "virtio-pc-pci"
 #define VIRTIO_PC_CONSUMER(obj)                                                \
   OBJECT_CHECK(VirtIOPCConsumer, obj, TYPE_VIRTIO_PC_CONSUMER)
 #define VIRTIO_PC_CONSUMER_PCI(obj)                                            \
@@ -43,7 +41,7 @@ static const VMStateDescription vmstate_virtio_pc_consumer = {
     .fields = (VMStateField[]){VMSTATE_VIRTIO_DEVICE, VMSTATE_END_OF_LIST()},
 };
 
-static Property virtio_pc_consumer_properties[] = {
+static const Property virtio_pc_consumer_properties[] = {
     DEFINE_PROP_UINT32("wq_len", VirtIOPCConsumer, config.work_queue_len, 256),
     DEFINE_PROP_UINT64("wc_c", VirtIOPCConsumer, config.work_cost_consumption,
                        3000),
@@ -55,7 +53,7 @@ static inline uint64_t rdtsc(void) {
   return (uint64_t)lo | ((uint64_t)hi << 32);
 }
 
-static uint64_t do_work(uint64_t cost) {
+static void do_work(uint64_t cost) {
   uint64_t until = rdtsc() + cost;
   while (rdtsc() < until)
     barrier();
@@ -85,7 +83,9 @@ static void virtio_pc_consumer_main_thread(void *opaque) {
     virtqueue_push(wq, elem, 0);
     g_free(elem);
 
+    printf("virtio-pc-consumer: consuming start at %lu\n", rdtsc());
     do_work(work_cost);
+    printf("virtio-pc-consumer: consuming end at %lu\n", rdtsc());
   }
 
   virtio_queue_set_notification(wq, 1);
@@ -106,7 +106,7 @@ static void virtio_pc_consumer_realize(DeviceState *dev, Error **errp) {
   VirtIODevice *vdev = VIRTIO_DEVICE(dev);
   VirtIOPCConsumer *cons = VIRTIO_PC_CONSUMER(dev);
 
-  virtio_init(vdev, VIRTIO_ID_ECHO, sizeof(struct virtio_pc_config));
+  virtio_init(vdev, VIRTIO_ID_PC, sizeof(struct virtio_pc_config));
 
   cons->wq = virtio_add_queue(vdev, cons->config.work_queue_len,
                               virtio_pc_consumer_on_wq_notify);
@@ -116,7 +116,7 @@ static void virtio_pc_consumer_realize(DeviceState *dev, Error **errp) {
 
 static void virtio_pc_consumer_unrealize(DeviceState *dev) {
   VirtIODevice *vdev = VIRTIO_DEVICE(dev);
-  VirtIOPCConsumer *cons = VIRTIO_PC_CONSUMER(cons);
+  VirtIOPCConsumer *cons = VIRTIO_PC_CONSUMER(dev);
 
   qemu_bh_delete(cons->bh);
   virtio_del_queue(vdev, 0);

@@ -193,7 +193,7 @@ const char *virtio_device_names[] = {
     [VIRTIO_ID_BT] = "virtio-bluetooth",
     [VIRTIO_ID_GPIO] = "virtio-gpio",
     [VIRTIO_ID_SPI] = "virtio-spi",
-    [VIRTIO_ID_HYPERPIPE] = "virtio-hyperpipe",
+    [VIRTIO_ID_PC] = "virtio-pc",
 };
 
 static const char *virtio_id_to_name(uint16_t device_id) {

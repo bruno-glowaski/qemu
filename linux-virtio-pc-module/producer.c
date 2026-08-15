@@ -1,31 +1,25 @@
-#include <asm-generic/errno-base.h>
-#include <linux/array_size.h>
+#include <asm/tsc.h>
+
+#include <linux/compiler.h>
 #include <linux/err.h>
+#include <linux/errno.h>
 #include <linux/fs.h>
-#include <linux/gfp_types.h>
-#include <linux/scatterlist.h>
-#include <linux/slab.h>
-#include <linux/virtio_config.h>
-#include <linux/init.h>
+#include <linux/miscdevice.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/printk.h>
+#include <linux/scatterlist.h>
+#include <linux/sched.h>
+#include <linux/sched/signal.h>
+#include <linux/slab.h>
+#include <linux/types.h>
 #include <linux/virtio.h>
 #include <linux/virtio_config.h>
-#include <linux/kernel.h>
-#include <linux/miscdevice.h>
-#include <stdint.h>
-#include <uapi/linux/virtio_ids.h>
 #include <linux/wait.h>
 
-#include "asm/current.h"
-#include "asm/tsc.h"
-#include "linux/compiler.h"
-#include "linux/mutex.h"
-#include "linux/printk.h"
-#include "linux/sched.h"
-#include "linux/sched/signal.h"
 #include "virtio-pc.h"
 
-#define VIRTIO_ID_PC 74
+#define VIRTIO_ID_PC_PRODUCER 74
 #define WORK_QUEUE_NAME "work_queue"
 
 /* Single work unit */
@@ -41,7 +35,7 @@ struct virtio_pc_wu {
  * `wq` stands for work queue
  *
  * */
-struct virtio_pc_device {
+struct virtio_pc_producer {
   struct virtio_device *vdev;
   struct virtqueue *vq;
 
@@ -55,7 +49,7 @@ struct virtio_pc_config {
 };
 
 /* global lock protected */
-static struct virtio_pc_device *pc = NULL;
+static struct virtio_pc_producer *pc = NULL;
 static struct virtio_pc_config *config = NULL;
 DEFINE_MUTEX(global_lock);
 
@@ -64,7 +58,7 @@ static void cleanup_items(void) {
   unsigned int len;
 
   buf = virtqueue_get_buf(pc->vq, &len);
-  printk("virtio_pc: cleaned up buf %p\n", buf);
+  printk("virtio-pc-producer: cleaned up buf %p\n", buf);
 }
 
 static void do_work(uint64_t cost) {
@@ -73,7 +67,7 @@ static void do_work(uint64_t cost) {
     barrier();
 }
 
-static long virtio_pc_run_producer(void) {
+static long virtio_pc_producer_main_thread(void) {
   int ret = 0, err = 0;
   bool kick = 0;
   size_t idx = 0;
@@ -91,7 +85,7 @@ static long virtio_pc_run_producer(void) {
   add_wait_queue(&pc->wq_empty_wqh, &queue_empty);
   for (;;) {
     if (unlikely(signal_pending(current))) {
-      printk("virtio_pc: signal received, returning\n");
+      printk("virtio-pc-producer: signal received, returning\n");
       ret = -EAGAIN;
       goto end;
     }
@@ -111,9 +105,9 @@ static long virtio_pc_run_producer(void) {
     }
 
     if (unlikely(err)) {
-      printk("virtio_pc: virtio_add_outbuf() failed with %d\n", err);
+      printk("virtio-pc-producer: virtio_add_outbuf() failed with %d\n", err);
     } else {
-      printk("virtio_pc: produced pkg %p\n", pkg);
+      printk("virtio-pc-producer: produced pkg %p\n", pkg);
     }
 
     if (vq->num_free == 0) {
@@ -135,30 +129,30 @@ end:
   return ret;
 }
 
-static long virtio_pc_ioctl(struct file *f, unsigned int cmd,
-                            unsigned long arg) {
+static long virtio_pc_producer_ioctl(struct file *f, unsigned int cmd,
+                                     unsigned long arg) {
   switch (cmd) {
   case VIRTIO_PC_CMD_START:
-    return virtio_pc_run_producer();
+    return virtio_pc_producer_main_thread();
   default:
     return -EINVAL;
   }
 }
 
-static struct file_operations virtio_pc_fops = {
+static struct file_operations virtio_pc_producer_fops = {
     .owner = THIS_MODULE,
-    .unlocked_ioctl = virtio_pc_ioctl,
+    .unlocked_ioctl = virtio_pc_producer_ioctl,
     .llseek = noop_llseek,
 };
 
-static struct miscdevice virtio_pc_misc = {
+static struct miscdevice virtio_pc_producer_misc = {
     .minor = MISC_DYNAMIC_MINOR,
-    .name = "virtio-pc",
-    .fops = &virtio_pc_fops,
+    .name = "virtio-pc-producer",
+    .fops = &virtio_pc_producer_fops,
 };
 
 static void virtio_pc_producer_on_queue_notify(struct virtqueue *vq) {
-  struct virtio_pc_device *priv = vq->vdev->priv;
+  struct virtio_pc_producer *priv = vq->vdev->priv;
 
   virtqueue_disable_cb(vq);
   wake_up_interruptible(&priv->wq_empty_wqh);
@@ -181,7 +175,7 @@ static void virtio_pc_free_config(void) {
   config = NULL;
 }
 
-static int virtio_pc_init_device(struct virtio_device *vdev) {
+static int virtio_pc_producer_init(struct virtio_device *vdev) {
   int ret = 0;
 
   pc = kzalloc(sizeof(*pc), GFP_KERNEL);
@@ -206,7 +200,7 @@ static int virtio_pc_init_device(struct virtio_device *vdev) {
     goto cleanup_pc;
   }
 
-  misc_register(&virtio_pc_misc);
+  misc_register(&virtio_pc_producer_misc);
 
   goto end;
 
@@ -217,8 +211,8 @@ end:
   return ret;
 }
 
-static void virtio_pc_destroy_device(void) {
-  misc_deregister(&virtio_pc_misc);
+static void virtio_pc_producer_destroy(void) {
+  misc_deregister(&virtio_pc_producer_misc);
 
   kfree(pc->wq_buf);
 
@@ -247,7 +241,7 @@ static int virtio_pc_probe(struct virtio_device *vdev) {
     goto end;
   }
 
-  ret = virtio_pc_init_device(vdev);
+  ret = virtio_pc_producer_init(vdev);
   if (ret != 0) {
     goto cleanup_config;
   }
@@ -267,7 +261,7 @@ static void virtio_pc_remove(struct virtio_device *vdev) {
   if (pc == NULL)
     goto end;
 
-  virtio_pc_destroy_device();
+  virtio_pc_producer_destroy();
   virtio_pc_free_config();
 
 end:
@@ -277,7 +271,7 @@ end:
 static unsigned int features[] = {/* empty */};
 
 static const struct virtio_device_id id_table[] = {
-    {VIRTIO_ID_PC, VIRTIO_DEV_ANY_ID}, {0}};
+    {VIRTIO_ID_PC_PRODUCER, VIRTIO_DEV_ANY_ID}, {0}};
 
 static struct virtio_driver virtio_pc_driver = {
     .driver.name = KBUILD_MODNAME,
