@@ -19,9 +19,6 @@
 
 #include "virtio-pc.h"
 
-#define VIRTIO_ID_PC 74
-#define WORK_QUEUE_NAME "work_queue"
-
 /* Single work unit */
 struct virtio_pc_wu {
   uint64_t prod_start_at;
