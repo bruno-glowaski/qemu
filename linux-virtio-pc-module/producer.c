@@ -19,7 +19,7 @@
 
 #include "virtio-pc.h"
 
-#define VIRTIO_ID_PC_PRODUCER 74
+#define VIRTIO_ID_PC 74
 #define WORK_QUEUE_NAME "work_queue"
 
 /* Single work unit */
@@ -178,24 +178,30 @@ static void virtio_pc_free_config(void) {
 static int virtio_pc_producer_init(struct virtio_device *vdev) {
   int ret = 0;
 
+  printk("virtio-pc-producer: allocating producer...\n");
   pc = kzalloc(sizeof(*pc), GFP_KERNEL);
   if (!pc) {
+    printk("virtio-pc-producer: failed to allocate!\n");
     ret = -ENOMEM;
     goto end;
   }
   pc->vdev = vdev;
   vdev->priv = pc;
 
+  printk("virtio-pc-producer: allocating work queue buffers...\n");
   pc->wq_buf =
       kzalloc(config->work_queue_len * sizeof(struct virtio_pc_wu), GFP_KERNEL);
   if (!pc->wq_buf) {
+    printk("virtio-pc-producer: failed to allocate!\n");
     ret = -ENOMEM;
     goto cleanup_pc;
   }
 
+  printk("virtio-pc-producer: searching for work queue...\n");
   pc->vq = virtio_find_single_vq(vdev, virtio_pc_producer_on_queue_notify,
                                  WORK_QUEUE_NAME);
   if (IS_ERR(pc->vq)) {
+    printk("virtio-pc-producer: failed to get work queue: %pe\n", pc->vq);
     ret = PTR_ERR(pc->vq);
     goto cleanup_pc;
   }
@@ -224,25 +230,36 @@ static void virtio_pc_producer_destroy(void) {
 static int virtio_pc_probe(struct virtio_device *vdev) {
   int ret = 0;
 
+  printk("virtio-pc-producer: acquiring global lock...\n");
   mutex_lock(&global_lock);
 
+  printk("virtio-pc-producer: checking virtio v1 support...\n");
   if (!virtio_has_feature(vdev, VIRTIO_F_VERSION_1)) {
+    printk("virtio-pc-producer: no virtio v1 support!\n");
     ret = -1;
     goto end;
   }
 
+  printk("virtio-pc-producer: checking if producer has already been "
+         "initialized...\n");
   if (pc != NULL) {
+    printk("virtio-pc-producer: producer has already been initialized. "
+           "skipping...\n");
     ret = -1;
     goto end;
   }
 
+  printk("virtio-pc-producer: reading config...\n");
   ret = virtio_pc_read_config();
   if (ret != 0) {
+    printk("virtio-pc-producer: failed to read config!\n");
     goto end;
   }
 
+  printk("virtio-pc-producer: initializing...\n");
   ret = virtio_pc_producer_init(vdev);
   if (ret != 0) {
+    printk("virtio-pc-producer: failed to initialize producer!\n");
     goto cleanup_config;
   }
 
@@ -271,7 +288,7 @@ end:
 static unsigned int features[] = {/* empty */};
 
 static const struct virtio_device_id id_table[] = {
-    {VIRTIO_ID_PC_PRODUCER, VIRTIO_DEV_ANY_ID}, {0}};
+    {VIRTIO_ID_PC, VIRTIO_DEV_ANY_ID}, {0}};
 
 static struct virtio_driver virtio_pc_driver = {
     .driver.name = KBUILD_MODNAME,
