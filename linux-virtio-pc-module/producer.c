@@ -202,6 +202,7 @@ static int virtio_pc_producer_init(struct virtio_device *vdev) {
     goto cleanup_pc;
   }
 
+  printk("virtio-pc-producer: adding misc device...\n");
   misc_register(&virtio_pc_producer_misc);
 
   goto end;
@@ -259,6 +260,7 @@ static int virtio_pc_probe(struct virtio_device *vdev) {
     goto cleanup_config;
   }
 
+  printk("virtio-pc-producer: probe done!\n");
   goto end;
 
 cleanup_config:
