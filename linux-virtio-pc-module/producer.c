@@ -16,6 +16,7 @@
 #include <linux/virtio_config.h>
 #include <linux/wait.h>
 
+#include "linux/virtio_config.h"
 #include "virtio-pc.h"
 
 /* Single work unit */
@@ -50,16 +51,17 @@ static struct virtio_pc_config *config = NULL;
 DEFINE_MUTEX(global_lock);
 
 static void cleanup_items(void) {
-  struct pcbuf *buf;
+  struct virtio_pc_wu *buf;
   unsigned int len;
 
-  buf = virtqueue_get_buf(pc->vq, &len);
-  printk("virtio-pc-producer: cleaned up buf %p\n", buf);
+  while ((buf = virtqueue_get_buf(pc->vq, &len)) != NULL) {
+    printk("virtio-pc-producer: cleaned up buf %p\n", buf);
+  }
 }
 
 static void do_work(uint64_t cost) {
   uint64_t ts_end = rdtsc() + cost;
-  while (ts_end < rdtsc())
+  while (rdtsc() < ts_end)
     barrier();
 }
 
@@ -72,13 +74,11 @@ static long virtio_pc_producer_main_thread(void) {
   struct virtio_pc_wu *wq_buf = NULL;
   struct virtio_pc_wu *pkg = NULL;
   struct scatterlist sg;
-  DECLARE_WAITQUEUE(queue_empty, current);
 
   vq = pc->vq;
   wq_buf = pc->wq_buf;
   work_cost = config->work_cost_production;
 
-  add_wait_queue(&pc->wq_empty_wqh, &queue_empty);
   for (;;) {
     if (unlikely(signal_pending(current))) {
       printk("virtio-pc-producer: signal received, returning\n");
@@ -86,8 +86,23 @@ static long virtio_pc_producer_main_thread(void) {
       goto end;
     }
 
-    pkg = &wq_buf[idx];
+    cleanup_items();
+    if (vq->num_free == 0) {
+      virtqueue_enable_cb(vq);
+      cleanup_items();
 
+      wait_event_interruptible(pc->wq_empty_wqh, ({
+                                 cleanup_items();
+                                 vq->num_free > 0 || signal_pending(current);
+                               }));
+
+      virtqueue_disable_cb(vq);
+
+      if (vq->num_free == 0)
+        continue;
+    }
+
+    pkg = &wq_buf[idx];
     pkg->prod_start_at = rdtsc();
     do_work(work_cost);
     pkg->prod_end_at = rdtsc();
@@ -104,24 +119,11 @@ static long virtio_pc_producer_main_thread(void) {
       printk("virtio-pc-producer: virtio_add_outbuf() failed with %d\n", err);
     } else {
       printk("virtio-pc-producer: produced pkg %p\n", pkg);
-    }
-
-    if (vq->num_free == 0) {
-      set_current_state(TASK_INTERRUPTIBLE);
-      if (!virtqueue_enable_cb_delayed(vq)) {
-        cleanup_items();
-      }
-      if (vq->num_free > 0) {
-        virtqueue_disable_cb(vq);
-        set_current_state(TASK_RUNNING);
-      } else {
-        schedule();
-      }
+      idx = (idx + 1) % config->work_queue_len;
     }
   }
 
 end:
-  remove_wait_queue(&pc->wq_empty_wqh, &queue_empty);
   return ret;
 }
 
@@ -182,6 +184,7 @@ static int virtio_pc_producer_init(struct virtio_device *vdev) {
     goto end;
   }
   pc->vdev = vdev;
+  init_waitqueue_head(&pc->wq_empty_wqh);
   vdev->priv = pc;
 
   printk("virtio-pc-producer: allocating work queue buffers...\n");
@@ -197,9 +200,10 @@ static int virtio_pc_producer_init(struct virtio_device *vdev) {
   pc->vq = virtio_find_single_vq(vdev, virtio_pc_producer_on_queue_notify,
                                  WORK_QUEUE_NAME);
   if (IS_ERR(pc->vq)) {
-    printk("virtio-pc-producer: failed to get work queue: %pe\n", pc->vq);
+    printk("virtio-pc-producer: failed to get work queue: %ld\n",
+           PTR_ERR(pc->vq));
     ret = PTR_ERR(pc->vq);
-    goto cleanup_pc;
+    goto cleanup_wq_buf;
   }
 
   printk("virtio-pc-producer: adding misc device...\n");
@@ -207,6 +211,8 @@ static int virtio_pc_producer_init(struct virtio_device *vdev) {
 
   goto end;
 
+cleanup_wq_buf:
+  kfree(pc->wq_buf);
 cleanup_pc:
   kfree(pc);
   pc = NULL;
@@ -283,7 +289,7 @@ end:
   mutex_unlock(&global_lock);
 }
 
-static unsigned int features[] = {/* empty */};
+static unsigned int features[] = {VIRTIO_F_VERSION_1};
 
 static const struct virtio_device_id id_table[] = {
     {VIRTIO_ID_PC, VIRTIO_DEV_ANY_ID}, {0}};
