@@ -20,9 +20,21 @@
 #include "virtio-pc.h"
 
 /* Single work unit */
-struct virtio_pc_wu {
+struct pc_wu {
   uint64_t prod_start_at;
   uint64_t prod_end_at;
+};
+
+enum prod_event_kind {
+  PROD_EVENT_KIND_WORK_START,
+  PROD_EVENT_KIND_WORK_END,
+  PROD_EVENT_KIND_SLEEP,
+  PROD_EVENT_KIND_WAKE_UP,
+};
+
+struct prod_event {
+  enum prod_event_kind kind;
+  uint64_t timestamp;
 };
 
 /*
@@ -37,7 +49,7 @@ struct virtio_pc_producer {
   struct virtqueue *vq;
 
   wait_queue_head_t wq_empty_wqh;
-  struct virtio_pc_wu *wq_buf;
+  struct pc_wu *wq_buf;
 };
 
 struct virtio_pc_config {
@@ -51,7 +63,7 @@ static struct virtio_pc_config *config = NULL;
 DEFINE_MUTEX(global_lock);
 
 static void cleanup_items(void) {
-  struct virtio_pc_wu *buf;
+  struct pc_wu *buf;
   unsigned int len;
 
   while ((buf = virtqueue_get_buf(pc->vq, &len)) != NULL) {
@@ -71,8 +83,8 @@ static long virtio_pc_producer_main_thread(void) {
   size_t idx = 0;
   uint64_t work_cost = 3000;
   struct virtqueue *vq = NULL;
-  struct virtio_pc_wu *wq_buf = NULL;
-  struct virtio_pc_wu *pkg = NULL;
+  struct pc_wu *wq_buf = NULL;
+  struct pc_wu *pkg = NULL;
   struct scatterlist sg;
 
   vq = pc->vq;
@@ -91,10 +103,13 @@ static long virtio_pc_producer_main_thread(void) {
       virtqueue_enable_cb(vq);
       cleanup_items();
 
+      printk("virtio-pc-producer: work queue filled, sleeping at %llu\n",
+             rdtsc());
       wait_event_interruptible(pc->wq_empty_wqh, ({
                                  cleanup_items();
                                  vq->num_free > 0 || signal_pending(current);
                                }));
+      printk("virtio-pc-producer: waking up at %llu\n", rdtsc());
 
       virtqueue_disable_cb(vq);
 
@@ -104,8 +119,11 @@ static long virtio_pc_producer_main_thread(void) {
 
     pkg = &wq_buf[idx];
     pkg->prod_start_at = rdtsc();
+    printk("virtio-pc-producer: pkg prod start at %llu\n", pkg->prod_start_at);
+
     do_work(work_cost);
     pkg->prod_end_at = rdtsc();
+    printk("virtio-pc-producer: pkg prod end at %llu\n", pkg->prod_end_at);
 
     sg_init_one(&sg, pkg, sizeof(*pkg));
     err = virtqueue_add_outbuf(vq, &sg, 1, pkg, GFP_ATOMIC);
@@ -189,7 +207,7 @@ static int virtio_pc_producer_init(struct virtio_device *vdev) {
 
   printk("virtio-pc-producer: allocating work queue buffers...\n");
   pc->wq_buf =
-      kzalloc(config->work_queue_len * sizeof(struct virtio_pc_wu), GFP_KERNEL);
+      kzalloc(config->work_queue_len * sizeof(struct pc_wu), GFP_KERNEL);
   if (!pc->wq_buf) {
     printk("virtio-pc-producer: failed to allocate!\n");
     ret = -ENOMEM;
