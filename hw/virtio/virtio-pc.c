@@ -6,6 +6,7 @@
 #include "hw/virtio/virtio-pci.h"
 #include "standard-headers/linux/virtio_config.h"
 #include "standard-headers/linux/virtio_ids.h"
+#include <stdio.h>
 
 #define TYPE_VIRTIO_PC_CONSUMER "virtio-pc"
 #define TYPE_VIRTIO_PC_CONSUMER_PCI "virtio-pc-pci"
@@ -139,7 +140,9 @@ static uint64_t virtio_pc_consumer_bad_features(VirtIODevice *vdev) {
   return 0;
 }
 
-static void virtio_pc_consumer_instance_init(Object *obj) {}
+static void virtio_pc_consumer_instance_init(Object *obj) {
+  printf("virtio-pc-consumer: creating virtio-pc-consumer...\n");
+}
 
 static void virtio_pc_consumer_class_init(ObjectClass *klass,
                                           const void *data) {
