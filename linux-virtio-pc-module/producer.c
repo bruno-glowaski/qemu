@@ -103,13 +103,17 @@ static long virtio_pc_producer_main_thread(void) {
       virtqueue_enable_cb(vq);
       cleanup_items();
 
+#ifdef DEBUG
       printk("virtio-pc-producer: work queue filled, sleeping at %llu\n",
              rdtsc());
+#endif /* ifdef DEBUG */
       wait_event_interruptible(pc->wq_empty_wqh, ({
                                  cleanup_items();
                                  vq->num_free > 0 || signal_pending(current);
                                }));
+#ifdef DEBUG
       printk("virtio-pc-producer: waking up at %llu\n", rdtsc());
+#endif /* ifdef DEBUG */
 
       virtqueue_disable_cb(vq);
 
@@ -119,11 +123,15 @@ static long virtio_pc_producer_main_thread(void) {
 
     pkg = &wq_buf[idx];
     pkg->prod_start_at = rdtsc();
+#ifdef DEBUG
     printk("virtio-pc-producer: pkg prod start at %llu\n", pkg->prod_start_at);
+#endif /* ifdef DEBUG */
 
     do_work(work_cost);
     pkg->prod_end_at = rdtsc();
+#ifdef DEBUG
     printk("virtio-pc-producer: pkg prod end at %llu\n", pkg->prod_end_at);
+#endif /* ifdef DEBUG */
 
     sg_init_one(&sg, pkg, sizeof(*pkg));
     err = virtqueue_add_outbuf(vq, &sg, 1, pkg, GFP_ATOMIC);
@@ -136,7 +144,9 @@ static long virtio_pc_producer_main_thread(void) {
     if (unlikely(err)) {
       printk("virtio-pc-producer: virtio_add_outbuf() failed with %d\n", err);
     } else {
+#ifdef DEBUG
       printk("virtio-pc-producer: produced pkg %p\n", pkg);
+#endif /* ifdef DEBUG */
       idx = (idx + 1) % config->work_queue_len;
     }
   }
