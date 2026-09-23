@@ -1,0 +1,24 @@
+#ifndef PC_HC_COMMON_ABI_H
+#define PC_HC_COMMON_ABI_H
+
+#define HCC_VENDOR_ID 0x1234
+#define HCC_DEVICE_ID 0x5678
+
+#define QT_BAR_REGS 0
+#define QT_BAR_MSIX 1
+#define QT_BAR_SHARED 2
+
+// RO 32-bit
+#define QT_REG_VERSION 0x000
+// RO 32-bit
+#define QT_REG_STATUS 0x008
+// RO 64-bit
+#define QT_REG_SHARED_SIZE 0x010
+// WO 32-bit
+#define QT_REG_DOORBELL 0x014
+
+#define QT_MSIX_BAR_SIZE 0x1000
+#define QT_MSIX_TABLE_OFFSET 0x0000
+#define QT_MSIX_PBA_OFFSET 0x0800
+
+#endif // !PC_HC_COMMON_ABI_H

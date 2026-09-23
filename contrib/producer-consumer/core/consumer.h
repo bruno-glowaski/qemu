@@ -16,8 +16,8 @@ typedef struct {
 typedef struct {
   tsc_t work_cost;
 
-  Runtime *runtime;
-  Transport *transport;
+  RuntimeMut runtime;
+  TransportMut transport;
   EventBuffer *events;
 } ConsumerInfo;
 
@@ -43,25 +43,25 @@ static inline int run_consumer(const ConsumerInfo *info) {
   Packet *packet;
   tsc_t work_cost, wait_start, wait_end, work_start, work_end, signal_start = 0,
                                                                signal_end = 0;
-  Runtime *runtime = info->runtime;
-  Transport *transport = info->transport;
+  RuntimeMut runtime = info->runtime;
+  TransportMut transport = info->transport;
   EventBuffer *events = info->events;
 
   work_cost = info->work_cost;
-  queue = transport->ops->get_queue(transport);
+  queue = transport.ops->get_queue(AsTransportConst(transport));
 
-  runtime->ops->fix_hart(runtime);
+  runtime.ops->fix_hart(runtime);
 
   for (;;) {
     if (event_buffer_is_filled(events)) {
       res = CREND;
       goto end;
     }
-    if (runtime->ops->is_interrupted(runtime)) {
+    if (runtime.ops->is_interrupted(AsRuntimeConst(runtime))) {
       res = CRINTERRUPTED;
       goto end;
     }
-    if (transport->ops->is_closed(transport)) {
+    if (transport.ops->is_closed(AsTransportConst(transport))) {
       res = CRCLOSED;
       goto end;
     }
@@ -70,7 +70,7 @@ static inline int run_consumer(const ConsumerInfo *info) {
     if (packet == NULL) {
       do {
         wait_start = read_tsc();
-        res = transport->ops->wait_until(transport);
+        res = transport.ops->wait_until(transport);
         wait_end = read_tsc();
         if (res != 0) {
           goto end;
@@ -105,7 +105,7 @@ static inline int run_consumer(const ConsumerInfo *info) {
 
     if (spsc_queue_consumer_needs_signal(queue)) {
       signal_start = read_tsc();
-      res = transport->ops->notify(transport);
+      res = transport.ops->notify(transport);
       if (res != 0) {
         goto end;
       }

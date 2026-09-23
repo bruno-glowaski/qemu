@@ -10,8 +10,8 @@
 typedef struct {
   tsc_t work_cost;
 
-  Runtime *runtime;
-  Transport *transport;
+  RuntimeMut runtime;
+  TransportMut transport;
 } ProducerInfo;
 
 static inline int run_producer(const ProducerInfo *info) {
@@ -19,20 +19,20 @@ static inline int run_producer(const ProducerInfo *info) {
   SPSCQueue *queue;
   Packet *packet;
   tsc_t work_cost, wait_start, wait_end, signal_start = 0, signal_end = 0;
-  Runtime *runtime = info->runtime;
-  Transport *transport = info->transport;
+  RuntimeMut runtime = info->runtime;
+  TransportMut transport = info->transport;
 
   work_cost = info->work_cost;
-  queue = transport->ops->get_queue(transport);
+  queue = transport.ops->get_queue(AsTransportConst(transport));
 
-  runtime->ops->fix_hart(runtime);
+  runtime.ops->fix_hart(runtime);
 
   for (;;) {
-    if (runtime->ops->is_interrupted(runtime)) {
+    if (runtime.ops->is_interrupted(AsRuntimeConst(runtime))) {
       res = CRINTERRUPTED;
       goto end;
     }
-    if (transport->ops->is_closed(transport)) {
+    if (transport.ops->is_closed(AsTransportConst(transport))) {
       res = CRCLOSED;
       goto end;
     }
@@ -41,7 +41,7 @@ static inline int run_producer(const ProducerInfo *info) {
     if (packet == NULL) {
       do {
         wait_start = read_tsc();
-        res = transport->ops->wait_until(transport);
+        res = transport.ops->wait_until(transport);
         wait_end = read_tsc();
         if (res != 0) {
           goto end;
@@ -58,7 +58,7 @@ static inline int run_producer(const ProducerInfo *info) {
     packet->consumer_events.wait_end = wait_end;
     packet->consumer_events.signal_start = signal_start;
     packet->consumer_events.signal_end = signal_end;
-    while (read_tsc() - wait_start < work_cost) {
+    while (read_tsc() - packet->consumer_events.work_start < work_cost) {
       barrier();
     }
     packet->consumer_events.work_end = read_tsc();
@@ -66,7 +66,7 @@ static inline int run_producer(const ProducerInfo *info) {
 
     if (spsc_queue_consumer_needs_signal(queue)) {
       signal_start = read_tsc();
-      res = transport->ops->notify(transport);
+      res = transport.ops->notify(transport);
       if (res != 0) {
         goto end;
       }

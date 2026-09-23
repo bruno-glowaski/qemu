@@ -22,29 +22,10 @@
 #include "contrib/producer-consumer/core/measurement.h"
 #include "contrib/producer-consumer/core/common.h"
 #include "contrib/producer-consumer/core/consumer.h"
+#include "contrib/producer-consumer/hc-common/abi.h"
 
 #define TYPE_HC_CONSUMER "hc-consumer"
 #define HC_CONSUMER(obj) OBJECT_CHECK(HCConsumer, obj, TYPE_HC_CONSUMER)
-
-#define HCC_VENDOR_ID 0x1234
-#define HCC_DEVICE_ID 0x5678
-
-#define QT_BAR_REGS 0
-#define QT_BAR_MSIX 1
-#define QT_BAR_SHARED 2
-
-// RO 32-bit
-#define QT_REG_VERSION 0x000
-// RO 32-bit
-#define QT_REG_STATUS 0x008
-// RO 64-bit
-#define QT_REG_SHARED_SIZE 0x010
-// WO 32-bit
-#define QT_REG_DOORBELL 0x014
-
-#define QT_MSIX_BAR_SIZE 0x1000
-#define QT_MSIX_TABLE_OFFSET 0x0000
-#define QT_MSIX_PBA_OFFSET 0x0800
 
 typedef struct {
   uint64_t event_len;
@@ -56,42 +37,91 @@ typedef struct {
 } HCConsumerConfig;
 
 typedef struct {
-  PCIDevice parent;
-
-  HCConsumerConfig config;
-
-  Runtime runtime;
-  EventBuffer events;
-  Transport transport;
-} HCConsumer;
+  QemuThread worker_thread;
+  atomic_bool_t interrupted;
+  EventNotifier *wakeup;
+} QemuRuntime;
 
 typedef struct {
   PCIDevice *owner;
 
   MemoryRegion regs_mr;
   EventNotifier doorbell;
+  EventNotifier wakeup;
 
   MemoryRegion msix_mr;
 
   uint64_t shared_size;
   MemoryRegion shared_mr;
   SPSCQueue *queue;
-} QemuTransport;
+} HCTransport;
 
-static SPSCQueue *qemu_transport_get_queue(const Transport *self) {
-  return ((QemuTransport *)self->data)->queue;
+typedef struct {
+  PCIDevice parent;
+
+  HCConsumerConfig config;
+
+  QemuRuntime runtime;
+  EventBuffer events;
+  HCTransport transport;
+} HCConsumer;
+
+static void qemu_runtime_fix_hart(RuntimeMut self) {}
+
+static bool qemu_runtime_is_interrupted(RuntimeConst self) {
+  const QemuRuntime *qr = self.data;
+  return ab_load_acquire(&qr->interrupted);
 }
 
-static int qemu_transport_wait_until(Transport *self) {
-  QemuTransport *qt = self->data;
+static const RuntimeOps qemu_runtime_ops = {
+    .fix_hart = qemu_runtime_fix_hart,
+    .is_interrupted = qemu_runtime_is_interrupted,
+};
 
-  struct pollfd pfd = {
-      .fd = event_notifier_get_fd(&qt->doorbell),
-      .events = POLLIN,
+declare_impl(QemuRuntime, Runtime, qemu_runtime_ops);
+
+static void qemu_runtime_interrupt(QemuRuntime *self) {
+  ab_store_release(&self->interrupted, true);
+  event_notifier_set(self->wakeup);
+}
+
+static void qemu_runtime_init(QemuRuntime *self, void *(*main_func)(void *),
+                              void *arg, EventNotifier *wakeup) {
+  ab_store_release(&self->interrupted, false);
+  self->wakeup = wakeup;
+
+  qemu_thread_create(&self->worker_thread, "qemu-runtime-worker", main_func,
+                     arg, QEMU_THREAD_JOINABLE);
+}
+
+static void qemu_runtime_deinit(QemuRuntime *self) {
+  qemu_runtime_interrupt(self);
+  qemu_thread_join(&self->worker_thread);
+
+  // For debugging
+  *self = (QemuRuntime){0};
+}
+
+static SPSCQueue *hc_transport_get_queue(TransportConst self) {
+  return ((HCTransport *)self.data)->queue;
+}
+
+static int hc_transport_wait_until(TransportMut self) {
+  HCTransport *qt = self.data;
+
+  struct pollfd pfds[2] = {
+      {
+          .fd = event_notifier_get_fd(&qt->doorbell),
+          .events = POLLIN,
+      },
+      {
+          .fd = event_notifier_get_fd(&qt->wakeup),
+          .events = POLLIN,
+      },
   };
 
   for (;;) {
-    int ret = poll(&pfd, 1, -1);
+    int ret = poll(pfds, ARRAY_SIZE(pfds), -1);
 
     if (ret < 0 && errno == EINTR) {
       continue;
@@ -101,36 +131,50 @@ static int qemu_transport_wait_until(Transport *self) {
       return -errno;
     }
 
-    if (pfd.revents & POLLIN) {
+    if (pfds[0].revents & POLLIN) {
       event_notifier_test_and_clear(&qt->doorbell);
       return 0;
+    }
+
+    if (pfds[1].revents & POLLIN) {
+      event_notifier_test_and_clear(&qt->wakeup);
+      return CRINTERRUPTED;
+    }
+
+    if (pfds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      return -EIO;
+    }
+
+    if (pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+      return -EIO;
     }
   }
 }
 
-static int qemu_transport_notify(Transport *self) {
+static int hc_transport_notify(TransportMut self) {
 
-  QemuTransport *qt = self->data;
+  HCTransport *qt = self.data;
   msix_notify(qt->owner, 0);
   return 0;
 }
 
-static bool qemu_transport_is_closed(const Transport *self) {
+static bool hc_transport_is_closed(TransportConst self) {
   /* TBD */
   return false;
 }
 
-static const TransportOps qemu_transport_ops = {
-    .get_queue = qemu_transport_get_queue,
-    .wait_until = qemu_transport_wait_until,
-    .notify = qemu_transport_notify,
-    .is_closed = qemu_transport_is_closed,
+static const TransportOps hc_transport_ops = {
+    .get_queue = hc_transport_get_queue,
+    .wait_until = hc_transport_wait_until,
+    .notify = hc_transport_notify,
+    .is_closed = hc_transport_is_closed,
 };
 
-static uint64_t qemu_transport_regs_read(void *opaque, hwaddr addr,
-                                         unsigned size) {
-  Transport *t = opaque;
-  QemuTransport *qt = t->data;
+declare_impl(HCTransport, Transport, hc_transport_ops);
+
+static uint64_t hc_transport_regs_read(void *opaque, hwaddr addr,
+                                       unsigned size) {
+  HCTransport *qt = opaque;
   switch (addr) {
   case QT_REG_VERSION:
     return 0;
@@ -142,29 +186,26 @@ static uint64_t qemu_transport_regs_read(void *opaque, hwaddr addr,
     return 0;
   }
 }
-static void qemu_transport_regs_write(void *opaque, hwaddr addr, uint64_t value,
-                                      unsigned size) {
+static void hc_transport_regs_write(void *opaque, hwaddr addr, uint64_t value,
+                                    unsigned size) {
   /*
    * DOORBELL is handled by ioeventfd, and the other registers are read-only
    */
 }
 
 static const MemoryRegionOps regs_mr_ops = {
-    .read = qemu_transport_regs_read,
-    .write = qemu_transport_regs_write,
+    .read = hc_transport_regs_read,
+    .write = hc_transport_regs_write,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = {.min_access_size = 4, .max_access_size = 8},
 };
 
-static bool qemu_transport_create(PCIDevice *owner, uint64_t queue_len,
-                                  MemoryRegion *backend_mr, Transport *self,
-                                  Error **errp) {
+static bool hc_transport_init(HCTransport *self, PCIDevice *owner,
+                              uint64_t queue_len, MemoryRegion *backend_mr,
+                              Error **errp) {
   int res = 0;
-  uint64_t aval_queue_capacity = 0, shared_size = 0;
+  uint64_t shared_size = 0, avail_len = 0;
   ERRP_GUARD();
-
-  self->data = NULL;
-  self->ops = NULL;
 
   shared_size = memory_region_size(backend_mr);
   if (!is_power_of_2(shared_size)) {
@@ -172,45 +213,51 @@ static bool qemu_transport_create(PCIDevice *owner, uint64_t queue_len,
     goto err;
   }
 
-  aval_queue_capacity = calculate_spsc_queue_capacity_for_size(shared_size);
-  if (aval_queue_capacity < queue_len) {
+  avail_len = calculate_spsc_queue_capacity_for_size(shared_size);
+  if (avail_len < queue_len) {
     error_setg(errp, "shared memory has insufficient size");
     goto err;
   }
 
-  QemuTransport *data;
-  data = g_new0(QemuTransport, 1);
-  data->owner = owner;
+  self->owner = owner;
+
+  res = event_notifier_init(&self->wakeup, 0);
+  if (res < 0) {
+    error_setg(errp, "failed to create wakeup event notifier: %s",
+               strerror(res));
+    goto err;
+  }
 
   /*
    * BAR0: Registers (0x1000)
    */
 
-  memory_region_init_io(&data->regs_mr, OBJECT(owner), &regs_mr_ops, self,
+  memory_region_init_io(&self->regs_mr, OBJECT(owner), &regs_mr_ops, self,
                         "qemu-transport-regs-mem", 0x1000);
 
-  res = event_notifier_init(&data->doorbell, 0);
+  res = event_notifier_init(&self->doorbell, 0);
   if (res < 0) {
-    error_setg(errp, "failed to initialize ioeventfd: %s", strerror(res));
-    goto err_free_data;
+    error_setg(errp, "failed to create doorbell event notifier: %s",
+               strerror(res));
+    goto err_cleanup_wakeup;
   }
-  memory_region_add_eventfd(&data->regs_mr, QT_REG_DOORBELL, 4, false, 0,
-                            &data->doorbell);
+  memory_region_add_eventfd(&self->regs_mr, QT_REG_DOORBELL, 4, false, 0,
+                            &self->doorbell);
 
   pci_register_bar(owner, QT_BAR_REGS, PCI_BASE_ADDRESS_SPACE_MEMORY,
-                   &data->regs_mr);
+                   &self->regs_mr);
 
   /*
    * BAR1: MSI-X (0x1000)
    */
 
-  memory_region_init(&data->msix_mr, OBJECT(owner), "qemu-transport-msix-mem",
+  memory_region_init(&self->msix_mr, OBJECT(owner), "qemu-transport-msix-mem",
                      QT_MSIX_BAR_SIZE);
 
-  res = msix_init(owner, 1, &data->msix_mr, QT_BAR_MSIX, QT_MSIX_TABLE_OFFSET,
-                  &data->msix_mr, QT_BAR_MSIX, QT_MSIX_PBA_OFFSET, 0, errp);
+  res = msix_init(owner, 1, &self->msix_mr, QT_BAR_MSIX, QT_MSIX_TABLE_OFFSET,
+                  &self->msix_mr, QT_BAR_MSIX, QT_MSIX_PBA_OFFSET, 0, errp);
   if (res < 0) {
-    goto err_destroy_doorbell;
+    goto err_cleanup_doorbell;
   }
   msix_vector_use(owner, 0);
 
@@ -218,99 +265,43 @@ static bool qemu_transport_create(PCIDevice *owner, uint64_t queue_len,
    * BAR2: Shared memory
    */
 
-  data->shared_size = shared_size;
-  memory_region_init_alias(&data->shared_mr, OBJECT(owner),
+  self->shared_size = shared_size;
+  memory_region_init_alias(&self->shared_mr, OBJECT(owner),
                            "qemu-transport-shared-mem", backend_mr, 0,
                            shared_size);
 
-  data->queue = memory_region_get_ram_ptr(backend_mr);
-  spsc_queue_init(data->queue, queue_len);
+  self->queue = memory_region_get_ram_ptr(backend_mr);
+  spsc_queue_init(self->queue, queue_len);
 
   pci_register_bar(owner, QT_BAR_SHARED,
                    PCI_BASE_ADDRESS_SPACE_MEMORY |
                        PCI_BASE_ADDRESS_MEM_PREFETCH,
-                   &data->shared_mr);
-
-  self->data = data;
-  self->ops = &qemu_transport_ops;
+                   &self->shared_mr);
 
   return true;
 
-err_destroy_doorbell:
-  memory_region_del_eventfd(&data->regs_mr, QT_REG_DOORBELL, 4, false, 0,
-                            &data->doorbell);
-  event_notifier_cleanup(&data->doorbell);
-err_free_data:
-  g_free(data);
+err_cleanup_doorbell:
+  memory_region_del_eventfd(&self->regs_mr, QT_REG_DOORBELL, 4, false, 0,
+                            &self->doorbell);
+  event_notifier_cleanup(&self->doorbell);
+err_cleanup_wakeup:
+  event_notifier_cleanup(&self->wakeup);
 err:
   return false;
 }
 
-static void qemu_transport_destroy(Transport *self) {
-  QemuTransport *qt = self->data;
+static void hc_transport_deinit(HCTransport *self) {
+  memory_region_del_eventfd(&self->regs_mr, QT_REG_DOORBELL, 4, false, 0,
+                            &self->doorbell);
+  event_notifier_cleanup(&self->doorbell);
 
-  memory_region_del_eventfd(&qt->regs_mr, QT_REG_DOORBELL, 4, false, 0,
-                            &qt->doorbell);
-  event_notifier_cleanup(&qt->doorbell);
+  msix_vector_unuse(self->owner, 0);
+  msix_uninit(self->owner, &self->msix_mr, &self->msix_mr);
 
-  msix_vector_unuse(qt->owner, 0);
-  msix_uninit(qt->owner, &qt->msix_mr, &qt->msix_mr);
+  event_notifier_cleanup(&self->wakeup);
 
-  g_free(qt);
-
-  self->data = NULL;
-  self->ops = NULL;
-}
-
-typedef struct {
-  QemuThread worker_thread;
-  atomic_bool_t interrupted;
-} QemuRuntime;
-
-static void qemu_runtime_fix_hart(Runtime *self) {}
-
-static bool qemu_runtime_is_interrupted(const Runtime *self) {
-  QemuRuntime *qr = self->data;
-  return ab_load_acquire(&qr->interrupted);
-}
-
-static const RuntimeOps qemu_runtime_ops = {
-    .fix_hart = qemu_runtime_fix_hart,
-    .is_interrupted = qemu_runtime_is_interrupted,
-};
-
-static void qemu_runtime_create(void *(*main_func)(void *), void *arg,
-                                Runtime *self) {
-  self->ops = NULL;
-  self->data = NULL;
-
-  QemuRuntime *data;
-  data = g_new0(QemuRuntime, 1);
-
-  ab_store_release(&data->interrupted, false);
-
-  self->data = data;
-  self->ops = &qemu_runtime_ops;
-
-  qemu_thread_create(&data->worker_thread, "qemu-runtime-worker", main_func,
-                     arg, QEMU_THREAD_JOINABLE);
-}
-
-static void qemu_runtime_interrupt(Runtime *self) {
-  QemuRuntime *qr = self->data;
-  ab_store_release(&qr->interrupted, true);
-}
-
-static void qemu_runtime_destroy(Runtime *self) {
-  QemuRuntime *qr = self->data;
-
-  ab_store_release(&qr->interrupted, true);
-  qemu_thread_join(&qr->worker_thread);
-
-  g_free(qr);
-
-  self->data = NULL;
-  self->ops = NULL;
+  // For debugging
+  *self = (HCTransport){0};
 }
 
 static void *consume(void *opaque) {
@@ -319,8 +310,8 @@ static void *consume(void *opaque) {
 
   const ConsumerInfo info = {
       .work_cost = cons->config.work_cost,
-      .runtime = &cons->runtime,
-      .transport = &cons->transport,
+      .runtime = QemuRuntimeAsRuntimeMut(&cons->runtime),
+      .transport = HCTransportAsTransportMut(&cons->transport),
       .events = &cons->events,
   };
 
@@ -361,22 +352,22 @@ static void hc_consumer_realize(PCIDevice *pdev, Error **errp) {
     return;
   }
 
-  if (!qemu_transport_create(pdev, cons->config.queue_len, mr, &cons->transport,
-                             errp)) {
+  if (!hc_transport_init(&cons->transport, pdev, cons->config.queue_len, mr,
+                         errp)) {
     return;
   }
 
   event_buffer_init(g_new0(PerPacketEvents, cons->config.queue_len),
                     cons->config.queue_len, &cons->events);
 
-  qemu_runtime_create(consume, cons, &cons->runtime);
+  qemu_runtime_init(&cons->runtime, consume, cons, &cons->transport.wakeup);
 }
 
 static void hc_consumer_unrealize(PCIDevice *pdev) {
   HCConsumer *cons = HC_CONSUMER(pdev);
 
-  qemu_runtime_destroy(&cons->runtime);
-  qemu_transport_destroy(&cons->transport);
+  qemu_runtime_deinit(&cons->runtime);
+  hc_transport_deinit(&cons->transport);
 
   g_free(cons->events.data);
 }

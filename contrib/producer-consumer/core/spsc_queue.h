@@ -31,6 +31,15 @@ typedef struct {
   cache_aligned Packet buffer[];
 } SPSCQueue;
 
+_Static_assert(offsetof(SPSCQueue, head) == 0, "bad head offset");
+_Static_assert(offsetof(SPSCQueue, tail) == 64, "bad tail offset");
+_Static_assert(offsetof(SPSCQueue, consumer_needs_signal) == 128,
+               "bad consumer signal offset");
+_Static_assert(offsetof(SPSCQueue, producer_needs_signal) == 192,
+               "bad producer signal offset");
+_Static_assert(offsetof(SPSCQueue, producer_needs_signal) == 192,
+               "bad producer signal offset");
+
 static inline uint64_t calculate_spsc_queue_capacity_for_size(uint64_t size) {
   if (size < offsetof(SPSCQueue, buffer))
     return 0;

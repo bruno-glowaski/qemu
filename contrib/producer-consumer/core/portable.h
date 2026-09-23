@@ -2,13 +2,30 @@
 #define PC_CORE_PORTABLE_H
 
 /*
- * Basic Types
+ * Includes
  */
 
 #ifdef __KERNEL__
 
-#include <linux/compiler.h>
 #include <linux/types.h>
+#include <linux/compiler.h>
+
+#include <asm/tsc.h>
+
+#else // Userspace
+
+#include <sched.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+#endif // __KERNEL__
+
+/*
+ * Basic Types
+ */
+
+#ifdef __KERNEL__
 
 typedef __s8 int8_t;
 typedef __s16 int16_t;
@@ -24,8 +41,9 @@ typedef __u64 uint64_t;
 
 #else
 
-#include <stdint.h>
-#include <stdbool.h>
+/*
+ * Included from stdint and stdbool
+ */
 
 #endif
 
@@ -77,8 +95,6 @@ PC_DEFINE_ATOMIC_INT_OPS(au32, atomic_uint32_t, uint32_t);
 
 #else /* Userspace */
 
-#include <stdatomic.h>
-
 #define PC_DEFINE_ATOMIC_INT_OPS(prefix, atomic_t, pure_t)                     \
   static inline pure_t prefix##_load_relaxed(const atomic_t *p) {              \
     return atomic_load_explicit((const _Atomic pure_t *)p,                     \
@@ -119,13 +135,9 @@ typedef uint64_t tsc_t;
 
 #ifdef KERNEL
 
-#include <asm/tsc.h>
-
 static inline tsc_t read_tsc() { rdtsc(); }
 
 #else
-
-#include <sched.h>
 
 #define barrier() __asm__ __volatile__("" : : : "memory")
 
@@ -138,38 +150,30 @@ static inline tsc_t read_tsc(void) {
 #endif // KERNEL
 
 /*
- * Runtime
+ * Utils
  */
 
-#ifdef KERNEL
+#define declare_trait(TraitName, OpsStruct)                                    \
+  typedef struct TraitName##Const {                                            \
+    const OpsStruct *ops;                                                      \
+    const void *data;                                                          \
+  } TraitName##Const;                                                          \
+  typedef struct TraitName##Mut {                                              \
+    const OpsStruct *ops;                                                      \
+    void *data;                                                                \
+  } TraitName##Mut;                                                            \
+  static inline TraitName##Const As##TraitName##Const(                         \
+      TraitName##Mut fat_ptr) {                                                \
+    return (TraitName##Const){.ops = fat_ptr.ops, .data = fat_ptr.data};       \
+  }
 
-#include <linux/cpu.h>
-#include <linux/cpumask.h>
-#include <linux/compiler>
-#include <linux/sched.h>
-
-static inline int fix_hart(void) {
-  int cpu = smp_processor_id();
-  set_cpus_allowed_ptr(current, cpumask_of(cpu));
-  return 0;
-}
-
-#else
-
-#include <signal.h>
-
-static volatile sig_atomic_t _program_interrupted;
-
-static inline int fix_hart(void) {
-  cpu_set_t set;
-  int current_hart = sched_getcpu();
-
-  CPU_ZERO(&set);
-  CPU_SET(current_hart, &set);
-
-  return sched_setaffinity(0, sizeof(set), &set);
-}
-
-#endif // KERNEL
+#define declare_impl(ImplName, TraitName, impl_ops)                            \
+  static inline TraitName##Const ImplName##As##TraitName##Const(               \
+      const ImplName *data) {                                                  \
+    return (TraitName##Const){.ops = &impl_ops, .data = data};                 \
+  }                                                                            \
+  static inline TraitName##Mut ImplName##As##TraitName##Mut(ImplName *data) {  \
+    return (TraitName##Mut){.ops = &impl_ops, .data = data};                   \
+  }
 
 #endif // !

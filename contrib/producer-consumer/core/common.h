@@ -9,27 +9,25 @@ typedef enum {
   CRINTERRUPTED = 2,
 } CompResult;
 
+typedef struct RuntimeConst RuntimeConst;
+typedef struct RuntimeMut RuntimeMut;
+
 /*
  * Represents the running context of the program.
  */
-typedef struct Runtime Runtime;
-
 typedef struct {
   /*
    * Checks if the program received an interrupt request and must stop.
    */
-  bool (*is_interrupted)(const Runtime *self);
+  bool (*is_interrupted)(RuntimeConst self);
 
   /*
    * Fixes the calling software thread to its current hardware thread.
    * If it fails, it should abort the program.
    */
-  void (*fix_hart)(Runtime *self);
+  void (*fix_hart)(RuntimeMut self);
 } RuntimeOps;
 
-typedef struct Runtime {
-  const RuntimeOps *ops;
-  void *data;
-} Runtime;
+declare_trait(Runtime, RuntimeOps);
 
 #endif // !PC_CORE_COMMON_H
