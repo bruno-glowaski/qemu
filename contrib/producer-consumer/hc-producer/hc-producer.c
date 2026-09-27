@@ -10,6 +10,8 @@
 #include "../hc-common/abi.h"
 #include "../linux-kernel/common.h"
 
+#define HCP_MODE HC_MODE_NOTIFY
+
 struct hcp_run_config {
   __u64 yield_cost;
   __u64 resume_cost;
@@ -164,7 +166,7 @@ static int hc_producer_open(struct inode *inode, struct file *file) {
   return 0;
 }
 
-static const struct file_operations hc_fops = {
+static const struct file_operations hc_producer_fops = {
     .owner = THIS_MODULE,
     .open = hc_producer_open,
     .unlocked_ioctl = hc_producer_ioctl,
@@ -175,8 +177,9 @@ static const struct file_operations hc_fops = {
 
 static int hc_producer_probe(struct pci_dev *pdev,
                              const struct pci_device_id *id) {
-  int ret;
   struct hc_producer_device *prod;
+  uint32_t hc_abi_version = 0, hc_mode = 0;
+  int ret;
 
   prod = devm_kzalloc(&pdev->dev, sizeof(*prod), GFP_KERNEL);
   if (!prod) {
@@ -184,60 +187,101 @@ static int hc_producer_probe(struct pci_dev *pdev,
     goto err;
   }
 
-  mutex_init(&prod->run_lock);
   pci_set_drvdata(pdev, prod);
 
+  /*
+   * Initialize struct
+   */
+  init_waitqueue_head(&prod->waitq);
+  mutex_init(&prod->run_lock);
+
+  /*
+   * Initialize PCI
+   */
   if (WARN_ON_ONCE(
           !(pci_resource_flags(pdev, HC_BAR_SHARED) & IORESOURCE_PREFETCH))) {
     dev_err(&pdev->dev, "BAR2 is not prefetchable\n");
     return -ENODEV;
   }
 
-  init_waitqueue_head(&prod->waitq);
-
   ret = pcim_enable_device(pdev);
-  if (ret)
+  if (ret) {
+    dev_err(&pdev->dev, "failed to enable PCI device\n");
     return ret;
+  }
 
   ret = pcim_iomap_regions(
       pdev, BIT(HC_BAR_REGS) | BIT(HC_BAR_MSIX) | BIT(HC_BAR_SHARED),
       "hc-consumer");
-  if (ret)
+  if (ret) {
+    dev_err(&pdev->dev, "failed to map regions\n");
     return ret;
+  }
 
   prod->regs = pcim_iomap_table(pdev)[HC_BAR_REGS];
   prod->msix = pcim_iomap_table(pdev)[HC_BAR_MSIX];
   prod->shared = pcim_iomap_table(pdev)[HC_BAR_SHARED];
-  prod->shared_size = pci_resource_len(pdev, HC_BAR_SHARED);
-
-  if (prod->shared_size < offsetof(SPSCQueue, buffer))
-    return -EINVAL;
   prod->queue = (SPSCQueue *)prod->shared;
-
   dev_info(&pdev->dev, "BAR0=%p BAR1=%p BAR2=%p shared_size=%llu\n", prod->regs,
-           prod->msix, prod->shared, (unsigned long long)prod->shared_size);
+           prod->msix, prod->shared, prod->shared_size);
+
+  /*
+   * Validate ABI
+   */
+
+  prod->shared_size = pci_resource_len(pdev, HC_BAR_SHARED);
+  if (prod->shared_size < offsetof(SPSCQueue, buffer)) {
+    dev_err(&pdev->dev, "insufficient shared size (%llu)\n", prod->shared_size);
+    return -EINVAL;
+  }
+
+  hc_abi_version = readl(prod->regs + HC_REG_ABI_VERSION);
+  if (hc_abi_version != HC_ABI_VERSION_1_0) {
+    dev_err(&pdev->dev, "ABI version mismatch (expected: %u; got: %u)\n",
+            HC_ABI_VERSION_1_0, hc_abi_version);
+    return -EINVAL;
+  }
+
+  hc_mode = readl(prod->regs + HC_REG_MODE);
+  if (hc_mode != HCP_MODE) {
+    dev_err(&pdev->dev, "waiting mode mismatch (expected: %u; got: %u)\n",
+            HCP_MODE, hc_mode);
+    return -EINVAL;
+  }
+
+  /*
+   * Initialize IRQ
+   */
 
   ret = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSIX);
-  if (ret < 0)
+  if (ret < 0) {
+    dev_err(&pdev->dev, "failed to allocate irq vectors\n");
     return ret;
-
+  }
   prod->irq = pci_irq_vector(pdev, 0);
 
   ret = devm_request_irq(&pdev->dev, prod->irq, hc_irq, 0, "linux_hc_transport",
                          prod);
-  if (ret)
+  if (ret) {
+    dev_err(&pdev->dev, "failed to request irq\n");
     goto err_irq_vectors;
+  }
 
   dev_info(&pdev->dev, "IRQ=%d\n", prod->irq);
 
+  /*
+   * Register device
+   */
   prod->miscdev.minor = MISC_DYNAMIC_MINOR;
   prod->miscdev.name = "hc-producer";
-  prod->miscdev.fops = &hc_fops;
+  prod->miscdev.fops = &hc_producer_fops;
   prod->miscdev.parent = &pdev->dev;
 
   ret = misc_register(&prod->miscdev);
-  if (ret)
+  if (ret) {
+    dev_err(&pdev->dev, "failed to register device\n");
     goto err_irq_vectors;
+  }
 
   return 0;
 
@@ -265,7 +309,6 @@ static struct pci_driver hc_producer_driver = {
     .id_table = hc_ids,
     .probe = hc_producer_probe,
     .remove = hc_producer_remove,
-
 };
 
 module_pci_driver(hc_producer_driver);
