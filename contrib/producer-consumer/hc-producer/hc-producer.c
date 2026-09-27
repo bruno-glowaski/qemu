@@ -1,6 +1,6 @@
 #include <linux/module.h>
 
-#include <asm-generic/errno-base.h>
+#include <linux/ioctl.h>
 #include <linux/miscdevice.h>
 #include <linux/pci.h>
 
@@ -10,7 +10,14 @@
 #include "../hc-common/abi.h"
 #include "../linux-kernel/common.h"
 
-#define HCP_IOCTL_RUN _IO('H', 0)
+struct hcp_run_config {
+  __u64 yield_cost;
+  __u64 resume_cost;
+  __u64 work_cost;
+  __u64 notify_cost;
+};
+
+#define HCP_IOCTL_RUN _IOW('H', 0, struct hcp_run_config)
 
 static const struct pci_device_id hc_ids[] = {
     {PCI_DEVICE(HCC_VENDOR_ID, HCC_DEVICE_ID)}, {}};
@@ -108,26 +115,36 @@ static const TransportOps hc_producer_transport_ops = {
 
 declare_impl(HCProducer, Transport, hc_producer_transport_ops);
 
-static long hc_producer_run(struct hc_producer_device *prod) {
+static long hc_producer_run(struct hc_producer_device *prod, Costs costs) {
   const ProducerInfo info = {
       .transport = HCProducerAsTransportMut(prod),
       .runtime = LinuxRuntimeAsRuntimeMut(NULL),
-      .costs = {3000, 3000, 3000, 3000},
+      .costs = costs,
   };
   return run_producer(&info);
 }
 
 static long hc_producer_ioctl(struct file *file, unsigned int cmd,
                               unsigned long arg) {
-  int ret;
   struct hc_producer_device *hc = file->private_data;
+  struct hcp_run_config config;
+  int ret;
 
   switch (cmd) {
   case HCP_IOCTL_RUN:
+    if (copy_from_user(&config, (void __user *)arg, sizeof(config))) {
+      return -EFAULT;
+    }
+
     if (!mutex_trylock(&hc->run_lock))
       return -EBUSY;
 
-    ret = hc_producer_run(hc);
+    ret = hc_producer_run(hc, (Costs){
+                                  .yield = config.yield_cost,
+                                  .resume = config.resume_cost,
+                                  .work = config.work_cost,
+                                  .notify = config.notify_cost,
+                              });
     mutex_unlock(&hc->run_lock);
     return ret;
 
@@ -226,11 +243,6 @@ static int hc_producer_probe(struct pci_dev *pdev,
 
 err_irq_vectors:
   pci_free_irq_vectors(pdev);
-  return ret;
-  if (ret != 0) {
-    goto err;
-  }
-
 err:
   return ret;
 }
