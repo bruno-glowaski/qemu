@@ -4,23 +4,32 @@
 #include "portable.h"
 #include "measurement.h"
 
+#define CACHE_LINE_SIZE 64
+
 /// A work packet
 typedef struct {
   PerSideEvents consumer_events;
-  unsigned char _padding[16];
+  unsigned char _padding[CACHE_LINE_SIZE - sizeof(PerSideEvents)];
 } Packet;
+_Static_assert(sizeof(Packet) == CACHE_LINE_SIZE,
+               "Packet must occupy exactly one cache line");
 
 /// A low-latency, lock-free shared queue oriented for single producer and
 /// single consumer cases.
 typedef struct {
   // Producer-owned state.
-  cache_aligned atomic_uint64_t head;
+  atomic_uint64_t head;
+  uint8_t _p0[CACHE_LINE_SIZE - sizeof(atomic_uint64_t)];
 
   // Consumer-owned state.
-  cache_aligned atomic_uint64_t tail;
+  atomic_uint64_t tail;
+  uint8_t _p1[CACHE_LINE_SIZE - sizeof(atomic_uint64_t)];
 
-  cache_aligned atomic_bool_t consumer_needs_signal;
-  cache_aligned atomic_bool_t producer_needs_signal;
+  atomic_bool_t consumer_needs_signal;
+  uint8_t _p2[CACHE_LINE_SIZE - sizeof(atomic_bool_t)];
+
+  atomic_bool_t producer_needs_signal;
+  uint8_t _p3[CACHE_LINE_SIZE - sizeof(atomic_bool_t)];
 
   /*
    * Immutable queue configuration.
@@ -28,7 +37,9 @@ typedef struct {
 
   // Total size of the queue.
   uint64_t len;
-  cache_aligned Packet buffer[];
+  uint8_t _p4[CACHE_LINE_SIZE - sizeof(uint64_t)];
+
+  Packet buffer[];
 } SPSCQueue;
 
 _Static_assert(offsetof(SPSCQueue, head) == 0, "bad head offset");
@@ -37,14 +48,11 @@ _Static_assert(offsetof(SPSCQueue, consumer_needs_signal) == 128,
                "bad consumer signal offset");
 _Static_assert(offsetof(SPSCQueue, producer_needs_signal) == 192,
                "bad producer signal offset");
-_Static_assert(offsetof(SPSCQueue, producer_needs_signal) == 192,
-               "bad producer signal offset");
+_Static_assert(offsetof(SPSCQueue, len) == 256, "bad len offset");
+_Static_assert(offsetof(SPSCQueue, buffer[0]) == 320, "bad buffer offset");
 
-static inline uint64_t calculate_spsc_queue_capacity_for_size(uint64_t size) {
-  if (size < offsetof(SPSCQueue, buffer))
-    return 0;
-
-  return (size - offsetof(SPSCQueue, buffer)) / sizeof(Packet);
+static inline uint64_t calculate_spsc_queue_size(uint64_t len) {
+  return offsetof(SPSCQueue, buffer[0]) + sizeof(Packet) * len;
 }
 
 static inline void spsc_queue_init(SPSCQueue *queue, uint64_t capacity) {

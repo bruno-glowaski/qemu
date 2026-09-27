@@ -54,8 +54,6 @@ typedef __u64 uint64_t;
  * Atomics
  */
 
-#define cache_aligned _Alignas(64)
-
 /*
  * atomic_*_t objects must only be accessed through the accessors below.
  * Direct reads/writes are not permitted.

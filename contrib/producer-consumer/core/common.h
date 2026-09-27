@@ -3,6 +3,13 @@
 
 #include "portable.h"
 
+typedef struct {
+  tsc_t yield;
+  tsc_t resume;
+  tsc_t work;
+  tsc_t notify;
+} Costs;
+
 typedef enum {
   CREND = 0,
   CRCLOSED = 1,

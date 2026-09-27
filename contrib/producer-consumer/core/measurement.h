@@ -4,12 +4,26 @@
 #include "portable.h"
 
 typedef struct {
-  tsc_t wait_start;
-  tsc_t wait_end;
+  tsc_t yield_start;
+  tsc_t yield_end;
+  tsc_t resume_start;
+  tsc_t resume_end;
   tsc_t work_start;
   tsc_t work_end;
-  tsc_t signal_start;
-  tsc_t signal_end;
+
+  /*
+   * notify_start intentionally describe the notification
+   * associated with the previous packet. The notification happens
+   * after this event is recorded.
+   */
+  tsc_t notify_start;
+
+  /*
+   * notify_end intentionally describe the notification
+   * associated with the previous packet. The notification happens
+   * after this event is recorded.
+   */
+  tsc_t notify_end;
 } PerSideEvents;
 
 typedef struct {

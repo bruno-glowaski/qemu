@@ -8,7 +8,7 @@
 #include "transport.h"
 
 typedef struct {
-  tsc_t work_cost;
+  Costs costs;
 
   RuntimeMut runtime;
   TransportMut transport;
@@ -18,14 +18,21 @@ static inline int run_producer(const ProducerInfo *info) {
   int res = 0;
   SPSCQueue *queue;
   Packet *packet;
-  tsc_t work_cost, wait_start, wait_end, signal_start = 0, signal_end = 0;
+  Costs costs;
+  tsc_t yield_start, yield_end, resume_start, resume_end, work_start, work_end,
+      notify_start = 0, notify_end = 0;
   RuntimeMut runtime = info->runtime;
   TransportMut transport = info->transport;
 
-  work_cost = info->work_cost;
+  costs = info->costs;
   queue = transport.ops->get_queue(AsTransportConst(transport));
 
   runtime.ops->fix_hart(runtime);
+
+  res = transport.ops->ready_barrier_wait(transport);
+  if (res != 0) {
+    goto end;
+  }
 
   for (;;) {
     if (runtime.ops->is_interrupted(AsRuntimeConst(runtime))) {
@@ -40,44 +47,73 @@ static inline int run_producer(const ProducerInfo *info) {
     packet = spsc_queue_peek_push(queue);
     if (packet == NULL) {
       do {
-        wait_start = read_tsc();
+        yield_start = read_tsc();
+        while ((yield_end = read_tsc()) - yield_start < costs.yield) {
+          barrier();
+        }
+
+        spsc_queue_request_signal_for_producer(queue);
+
+        // A packet might have been published between the prior peek and
+        // request_signal.
+        packet = spsc_queue_peek_push(queue);
+        if (packet != NULL) {
+          break;
+        }
+
         res = transport.ops->wait_until(transport);
-        wait_end = read_tsc();
         if (res != 0) {
           goto end;
         }
+
+        resume_start = read_tsc();
+        while ((resume_end = read_tsc()) - resume_start < costs.resume) {
+          barrier();
+        }
+
         packet = spsc_queue_peek_push(queue);
       } while (packet == NULL);
+      spsc_queue_clear_signal_for_producer(queue);
     } else {
-      wait_start = 0;
-      wait_end = 0;
+      resume_start = 0;
+      resume_end = 0;
+      yield_start = 0;
+      yield_end = 0;
     }
 
-    packet->consumer_events.work_start = read_tsc();
-    packet->consumer_events.wait_start = wait_start;
-    packet->consumer_events.wait_end = wait_end;
-    packet->consumer_events.signal_start = signal_start;
-    packet->consumer_events.signal_end = signal_end;
-    while (read_tsc() - packet->consumer_events.work_start < work_cost) {
+    work_start = read_tsc();
+    while ((work_end = read_tsc()) - work_start < costs.work) {
       barrier();
     }
-    packet->consumer_events.work_end = read_tsc();
+
+    packet->consumer_events.work_start = work_start;
+    packet->consumer_events.work_end = work_end;
+    packet->consumer_events.yield_start = yield_start;
+    packet->consumer_events.yield_end = yield_end;
+    packet->consumer_events.resume_start = resume_start;
+    packet->consumer_events.resume_end = resume_end;
+    packet->consumer_events.notify_start = notify_start;
+    packet->consumer_events.notify_end = notify_end;
+
     spsc_queue_commit_push(queue);
 
     if (spsc_queue_consumer_needs_signal(queue)) {
-      signal_start = read_tsc();
+      notify_start = read_tsc();
       res = transport.ops->notify(transport);
       if (res != 0) {
         goto end;
       }
-      signal_end = read_tsc();
+      while ((notify_end = read_tsc()) - notify_start < costs.notify) {
+        barrier();
+      }
     } else {
-      signal_start = 0;
-      signal_end = 0;
+      notify_start = 0;
+      notify_end = 0;
     }
   }
 
 end:
+  transport.ops->close(transport);
   return res;
 }
 

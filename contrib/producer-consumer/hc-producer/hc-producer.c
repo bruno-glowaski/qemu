@@ -1,5 +1,6 @@
 #include <linux/module.h>
 
+#include <asm-generic/errno-base.h>
 #include <linux/miscdevice.h>
 #include <linux/pci.h>
 
@@ -8,17 +9,18 @@
 #include "../core/producer.h"
 #include "../hc-common/abi.h"
 #include "../linux-kernel/common.h"
-#include "asm-generic/errno-base.h"
 
-#define HCP_IOCTL_RUN 0
+#define HCP_IOCTL_RUN _IO('H', 0)
 
 static const struct pci_device_id hc_ids[] = {
     {PCI_DEVICE(HCC_VENDOR_ID, HCC_DEVICE_ID)}, {}};
 
 MODULE_DEVICE_TABLE(pci, hc_ids);
 
-typedef struct LinuxHCTransport {
-  struct pci_dev *owner;
+typedef struct hc_producer_device {
+  Costs costs;
+
+  struct miscdevice miscdev;
 
   wait_queue_head_t waitq;
 
@@ -30,51 +32,58 @@ typedef struct LinuxHCTransport {
 
   SPSCQueue *queue;
   int irq;
-} LinuxHCTransport;
-
-struct hc_producer_device {
-  struct pci_dev *pdev;
-
-  struct miscdevice miscdev;
-
-  LinuxHCTransport transport;
 
   struct mutex run_lock;
-};
+} HCProducer;
 
 static irqreturn_t hc_irq(int irq, void *data) {
-  LinuxHCTransport *lt = data;
+  struct hc_producer_device *prod = data;
 
-  wake_up_interruptible(&lt->waitq);
+  wake_up_interruptible(&prod->waitq);
 
   return IRQ_HANDLED;
 }
 
-static SPSCQueue *linux_hc_transport_get_queue(TransportConst self) {
-  const LinuxHCTransport *lt = self.data;
+static SPSCQueue *hc_producer_get_queue(TransportConst self) {
+  const HCProducer *prod = self.data;
 
-  return lt->queue;
+  return prod->queue;
 }
 
-static int linux_hc_transport_notify(TransportMut self) {
-  LinuxHCTransport *lt = self.data;
+static int hc_producer_wait_ready_barrier(TransportMut self) {
+  const HCProducer *prod = self.data;
+  for (;;) {
+    if (readl(prod->regs + HC_REG_CONS_STATUS) != HC_SIDE_STATUS_PENDING) {
+      return 0;
+    }
+    if (signal_pending(current)) {
+      return CRINTERRUPTED;
+    }
+  }
+}
 
-  writel(0, lt->regs + QT_REG_DOORBELL);
+static int hc_producer_notify(TransportMut self) {
+  HCProducer *prod = self.data;
+
+  writel(0, prod->regs + HC_REG_DOORBELL);
 
   return 0;
 }
 
-static bool linux_hc_transport_is_closed(TransportConst self) { return false; }
+static bool hc_producer_is_closed(TransportConst self) {
+  const HCProducer *prod = self.data;
+  return readl(prod->regs + HC_REG_CONS_STATUS) == HC_SIDE_STATUS_CLOSED;
+}
 
-static int linux_hc_transport_wait_until(TransportMut self) {
+static int hc_producer_wait_until(TransportMut self) {
   int ret;
-  LinuxHCTransport *lt = self.data;
+  HCProducer *prod = self.data;
 
-  spsc_queue_request_signal_for_producer(lt->queue);
+  spsc_queue_request_signal_for_producer(prod->queue);
   ret = wait_event_interruptible(
-      lt->waitq, spsc_queue_peek_push(lt->queue) != NULL ||
-                     linux_hc_transport_is_closed(AsTransportConst(self)));
-  spsc_queue_clear_signal_for_producer(lt->queue);
+      prod->waitq, spsc_queue_peek_push(prod->queue) != NULL ||
+                       hc_producer_is_closed(AsTransportConst(self)));
+  spsc_queue_clear_signal_for_producer(prod->queue);
 
   if (ret == -EINTR) {
     return CRINTERRUPTED;
@@ -83,83 +92,27 @@ static int linux_hc_transport_wait_until(TransportMut self) {
   return ret;
 }
 
-static const TransportOps linux_hc_transport_ops = {
-    .get_queue = linux_hc_transport_get_queue,
-    .is_closed = linux_hc_transport_is_closed,
-    .wait_until = linux_hc_transport_wait_until,
-    .notify = linux_hc_transport_notify,
+static void hc_producer_close(TransportMut self) {
+  HCProducer *prod = self.data;
+  writel(HC_SIDE_STATUS_CLOSED, prod->regs + HC_REG_PROD_STATUS);
+}
+
+static const TransportOps hc_producer_transport_ops = {
+    .get_queue = hc_producer_get_queue,
+    .ready_barrier_wait = hc_producer_wait_ready_barrier,
+    .wait_until = hc_producer_wait_until,
+    .notify = hc_producer_notify,
+    .is_closed = hc_producer_is_closed,
+    .close = hc_producer_close,
 };
 
-declare_impl(LinuxHCTransport, Transport, linux_hc_transport_ops);
+declare_impl(HCProducer, Transport, hc_producer_transport_ops);
 
-static int linux_hc_transport_init(LinuxHCTransport *self,
-                                   struct pci_dev *owner) {
-  int ret;
-
-  if (WARN_ON_ONCE(
-          !(pci_resource_flags(owner, QT_BAR_SHARED) & IORESOURCE_PREFETCH))) {
-    dev_err(&owner->dev, "BAR2 is not prefetchable\n");
-    return -ENODEV;
-  }
-
-  self->owner = owner;
-  init_waitqueue_head(&self->waitq);
-
-  ret = pcim_enable_device(owner);
-  if (ret)
-    return ret;
-
-  ret = pcim_iomap_regions(
-      owner, BIT(QT_BAR_REGS) | BIT(QT_BAR_MSIX) | BIT(QT_BAR_SHARED),
-      "hc-consumer");
-  if (ret)
-    return ret;
-
-  self->regs = pcim_iomap_table(owner)[QT_BAR_REGS];
-  self->msix = pcim_iomap_table(owner)[QT_BAR_MSIX];
-  self->shared = pcim_iomap_table(owner)[QT_BAR_SHARED];
-  self->shared_size = pci_resource_len(owner, QT_BAR_SHARED);
-
-  if (self->shared_size < offsetof(SPSCQueue, buffer))
-    return -EINVAL;
-  self->queue = (SPSCQueue *)self->shared;
-
-  dev_info(&owner->dev, "BAR0=%p BAR1=%p BAR2=%p shared_size=%llu\n",
-           self->regs, self->msix, self->shared,
-           (unsigned long long)self->shared_size);
-
-  ret = pci_alloc_irq_vectors(owner, 1, 1, PCI_IRQ_MSIX);
-  if (ret < 0)
-    return ret;
-
-  self->irq = pci_irq_vector(owner, 0);
-
-  ret = devm_request_irq(&owner->dev, self->irq, hc_irq, 0,
-                         "linux_hc_transport", self);
-  if (ret)
-    goto err_irq_vectors;
-
-  dev_info(&owner->dev, "IRQ=%d\n", self->irq);
-
-  return 0;
-
-err_irq_vectors:
-  pci_free_irq_vectors(owner);
-  return ret;
-}
-
-static void linux_hc_transport_destroy(LinuxHCTransport *self) {
-  pci_free_irq_vectors(self->owner);
-
-  // Helps debugging.
-  *self = (LinuxHCTransport){0};
-}
-
-static long hc_producer_run(struct hc_producer_device *hc) {
+static long hc_producer_run(struct hc_producer_device *prod) {
   const ProducerInfo info = {
-      .transport = LinuxHCTransportAsTransportMut(&hc->transport),
+      .transport = HCProducerAsTransportMut(prod),
       .runtime = LinuxRuntimeAsRuntimeMut(NULL),
-      .work_cost = 3000,
+      .costs = {3000, 3000, 3000, 3000},
   };
   return run_producer(&info);
 }
@@ -206,49 +159,91 @@ static const struct file_operations hc_fops = {
 static int hc_producer_probe(struct pci_dev *pdev,
                              const struct pci_device_id *id) {
   int ret;
-  struct hc_producer_device *hc;
+  struct hc_producer_device *prod;
 
-  hc = devm_kzalloc(&pdev->dev, sizeof(*hc), GFP_KERNEL);
-  if (!hc) {
+  prod = devm_kzalloc(&pdev->dev, sizeof(*prod), GFP_KERNEL);
+  if (!prod) {
     ret = -ENOMEM;
     goto err;
   }
 
-  mutex_init(&hc->run_lock);
-  pci_set_drvdata(pdev, hc);
+  mutex_init(&prod->run_lock);
+  pci_set_drvdata(pdev, prod);
 
-  ret = linux_hc_transport_init(&hc->transport, pdev);
+  if (WARN_ON_ONCE(
+          !(pci_resource_flags(pdev, HC_BAR_SHARED) & IORESOURCE_PREFETCH))) {
+    dev_err(&pdev->dev, "BAR2 is not prefetchable\n");
+    return -ENODEV;
+  }
+
+  init_waitqueue_head(&prod->waitq);
+
+  ret = pcim_enable_device(pdev);
+  if (ret)
+    return ret;
+
+  ret = pcim_iomap_regions(
+      pdev, BIT(HC_BAR_REGS) | BIT(HC_BAR_MSIX) | BIT(HC_BAR_SHARED),
+      "hc-consumer");
+  if (ret)
+    return ret;
+
+  prod->regs = pcim_iomap_table(pdev)[HC_BAR_REGS];
+  prod->msix = pcim_iomap_table(pdev)[HC_BAR_MSIX];
+  prod->shared = pcim_iomap_table(pdev)[HC_BAR_SHARED];
+  prod->shared_size = pci_resource_len(pdev, HC_BAR_SHARED);
+
+  if (prod->shared_size < offsetof(SPSCQueue, buffer))
+    return -EINVAL;
+  prod->queue = (SPSCQueue *)prod->shared;
+
+  dev_info(&pdev->dev, "BAR0=%p BAR1=%p BAR2=%p shared_size=%llu\n", prod->regs,
+           prod->msix, prod->shared, (unsigned long long)prod->shared_size);
+
+  ret = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSIX);
+  if (ret < 0)
+    return ret;
+
+  prod->irq = pci_irq_vector(pdev, 0);
+
+  ret = devm_request_irq(&pdev->dev, prod->irq, hc_irq, 0, "linux_hc_transport",
+                         prod);
+  if (ret)
+    goto err_irq_vectors;
+
+  dev_info(&pdev->dev, "IRQ=%d\n", prod->irq);
+
+  prod->miscdev.minor = MISC_DYNAMIC_MINOR;
+  prod->miscdev.name = "hc-producer";
+  prod->miscdev.fops = &hc_fops;
+  prod->miscdev.parent = &pdev->dev;
+
+  ret = misc_register(&prod->miscdev);
+  if (ret)
+    goto err_irq_vectors;
+
+  return 0;
+
+err_irq_vectors:
+  pci_free_irq_vectors(pdev);
+  return ret;
   if (ret != 0) {
     goto err;
   }
 
-  hc->miscdev.minor = MISC_DYNAMIC_MINOR;
-  hc->miscdev.name = "hc-producer";
-  hc->miscdev.fops = &hc_fops;
-  hc->miscdev.parent = &pdev->dev;
-
-  ret = misc_register(&hc->miscdev);
-  if (ret)
-    goto err_destroy_transport;
-
-  return 0;
-
-err_destroy_transport:
-  linux_hc_transport_destroy(&hc->transport);
 err:
   return ret;
 }
 
 static void hc_producer_remove(struct pci_dev *pdev) {
-  struct hc_producer_device *hc = pci_get_drvdata(pdev);
+  struct hc_producer_device *prod = pci_get_drvdata(pdev);
 
-  misc_deregister(&hc->miscdev);
+  misc_deregister(&prod->miscdev);
 
-  mutex_lock(&hc->run_lock);
+  mutex_lock(&prod->run_lock);
+  mutex_unlock(&prod->run_lock);
 
-  linux_hc_transport_destroy(&hc->transport);
-
-  mutex_unlock(&hc->run_lock);
+  pci_free_irq_vectors(pdev);
 
   dev_info(&pdev->dev, "removed\n");
 }
