@@ -2,7 +2,6 @@
 
 #include "glib.h"
 
-#include "qemu/log-for-trace.h"
 #include "qemu/error-report.h"
 #include "hw/core/qdev.h"
 #include "hw/pci/msix.h"
@@ -16,6 +15,7 @@
 #include "system/memory.h"
 
 #include <sched.h>
+#include <string.h>
 #include <sys/poll.h>
 
 #include "contrib/producer-consumer/core/portable.h"
@@ -34,6 +34,8 @@ typedef struct {
   uint64_t queue_len;
 
   Costs costs;
+
+  char *output_path;
 } HCConsumerConfig;
 
 typedef struct {
@@ -378,18 +380,33 @@ static void hc_consumer_unrealize(PCIDevice *pdev) {
   msix_vector_unuse(pdev, 0);
   msix_uninit(pdev, &cons->msix_mr, &cons->msix_mr);
 
+  int fd =
+      qemu_open(cons->config.output_path, O_WRONLY | O_CREAT | O_TRUNC, NULL);
+  if (fd < 0) {
+    error_report("failed to create output file: %s", strerror(errno));
+    goto skip_output;
+  }
+
   for (uint64_t i = 0; i < cons->events.len; i++) {
     PerPacketEvents event = cons->events.data[i];
-    qemu_log("HC_CONSUMER_EVENT: PROD(Y: %lu-%lu, W: %lu-%lu, N: %lu-%lu); "
-             "CONS(Y: %lu-%lu, W: %lu-%lu, N: %lu-%lu)",
-             event.producer.yield_start, event.producer.yield_end,
-             event.producer.work_start, event.producer.work_end,
-             event.producer.notify_start, event.producer.notify_end,
-             event.consumer.yield_start, event.consumer.yield_end,
-             event.consumer.work_start, event.consumer.work_end,
-             event.consumer.notify_start, event.consumer.notify_end);
+    dprintf(fd,
+            "%lu,%lu,%lu,%lu,%lu,%lu"
+            "%lu,%lu,%lu,%lu,%lu,%lu\n",
+            event.producer.yield_start, event.producer.yield_end,
+            event.producer.work_start, event.producer.work_end,
+            event.producer.notify_start, event.producer.notify_end,
+            event.consumer.yield_start, event.consumer.yield_end,
+            event.consumer.work_start, event.consumer.work_end,
+            event.consumer.notify_start, event.consumer.notify_end);
   }
+  close(fd);
+skip_output:
   g_free(cons->events.data);
+}
+
+static void hc_consumer_init(Object *obj) {
+  HCConsumer *cons = HC_CONSUMER(obj);
+  cons->config.output_path = g_strdup("./output.csv");
 }
 
 static Property hc_consumer_properties[] = {
@@ -400,6 +417,8 @@ static Property hc_consumer_properties[] = {
     DEFINE_PROP_UINT64("yield-cost", HCConsumer, config.costs.yield, 3000),
     DEFINE_PROP_UINT64("resume-cost", HCConsumer, config.costs.resume, 3000),
     DEFINE_PROP_UINT64("notify-cost", HCConsumer, config.costs.notify, 3000),
+
+    DEFINE_PROP_STRING("output-path", HCConsumer, config.output_path),
 };
 
 static void hc_consumer_class_init(ObjectClass *klass, const void *data) {
@@ -424,6 +443,7 @@ static const TypeInfo hc_consumer_info = {
     .parent = TYPE_PCI_DEVICE,
     .instance_size = sizeof(HCConsumer),
     .class_init = hc_consumer_class_init,
+    .instance_init = hc_consumer_init,
 };
 
 static void hc_consumer_type_init(void) {
