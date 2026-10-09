@@ -42,8 +42,8 @@ static inline int run_consumer(const ConsumerInfo *info) {
   SPSCQueue *queue;
   Packet *packet;
   Costs costs;
-  tsc_t yield_start, yield_end, resume_start, resume_end, work_start, work_end,
-      notify_start = 0, notify_end = 0;
+  tsc_t yield_start = 0, yield_end = 0, resume_start = 0, resume_end = 0,
+        work_start = 0, work_end = 0, notify_start = 0, notify_end = 0;
   RuntimeMut runtime = info->runtime;
   TransportMut transport = info->transport;
   EventBuffer *events = info->events;
@@ -77,7 +77,7 @@ static inline int run_consumer(const ConsumerInfo *info) {
       do {
         yield_start = read_tsc();
         while ((yield_end = read_tsc()) - yield_start < costs.yield) {
-          barrier();
+          mbarrier();
         }
 
         spsc_queue_request_signal_for_consumer(queue);
@@ -96,7 +96,7 @@ static inline int run_consumer(const ConsumerInfo *info) {
 
         resume_start = read_tsc();
         while ((resume_end = read_tsc()) - resume_start < costs.resume) {
-          barrier();
+          mbarrier();
         }
 
         packet = spsc_queue_peek_pop(queue);
@@ -111,9 +111,8 @@ static inline int run_consumer(const ConsumerInfo *info) {
 
     work_start = read_tsc();
     while ((work_end = read_tsc()) - work_start < costs.work) {
-      barrier();
+      mbarrier();
     }
-
     event_buffer_push(events, (PerPacketEvents){
                                   .consumer = packet->consumer_events,
                                   .producer =
@@ -138,7 +137,7 @@ static inline int run_consumer(const ConsumerInfo *info) {
         goto end;
       }
       while ((notify_end = read_tsc()) - notify_start < costs.notify) {
-        barrier();
+        mbarrier();
       }
     } else {
       notify_start = 0;

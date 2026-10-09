@@ -137,7 +137,7 @@ static inline tsc_t read_tsc() { rdtsc(); }
 
 #else
 
-#define barrier() __asm__ __volatile__("" : : : "memory")
+#define mbarrier() __asm__ __volatile__("" : : : "memory")
 
 static inline tsc_t read_tsc(void) {
   uint32_t hi, lo;

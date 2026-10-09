@@ -19,8 +19,8 @@ static inline int run_producer(const ProducerInfo *info) {
   SPSCQueue *queue;
   Packet *packet;
   Costs costs;
-  tsc_t yield_start, yield_end, resume_start, resume_end, work_start, work_end,
-      notify_start = 0, notify_end = 0;
+  tsc_t yield_start = 0, yield_end = 0, resume_start = 0, resume_end = 0,
+        work_start = 0, work_end = 0, notify_start = 0, notify_end = 0;
   RuntimeMut runtime = info->runtime;
   TransportMut transport = info->transport;
 
@@ -49,7 +49,7 @@ static inline int run_producer(const ProducerInfo *info) {
       do {
         yield_start = read_tsc();
         while ((yield_end = read_tsc()) - yield_start < costs.yield) {
-          barrier();
+          mbarrier();
         }
 
         spsc_queue_request_signal_for_producer(queue);
@@ -68,7 +68,7 @@ static inline int run_producer(const ProducerInfo *info) {
 
         resume_start = read_tsc();
         while ((resume_end = read_tsc()) - resume_start < costs.resume) {
-          barrier();
+          mbarrier();
         }
 
         packet = spsc_queue_peek_push(queue);
@@ -82,10 +82,6 @@ static inline int run_producer(const ProducerInfo *info) {
     }
 
     work_start = read_tsc();
-    while ((work_end = read_tsc()) - work_start < costs.work) {
-      barrier();
-    }
-
     packet->consumer_events.work_start = work_start;
     packet->consumer_events.work_end = work_end;
     packet->consumer_events.yield_start = yield_start;
@@ -94,6 +90,9 @@ static inline int run_producer(const ProducerInfo *info) {
     packet->consumer_events.resume_end = resume_end;
     packet->consumer_events.notify_start = notify_start;
     packet->consumer_events.notify_end = notify_end;
+    while ((work_end = read_tsc()) - work_start < costs.work) {
+      mbarrier();
+    }
 
     spsc_queue_commit_push(queue);
 
@@ -104,7 +103,7 @@ static inline int run_producer(const ProducerInfo *info) {
         goto end;
       }
       while ((notify_end = read_tsc()) - notify_start < costs.notify) {
-        barrier();
+        mbarrier();
       }
     } else {
       notify_start = 0;
