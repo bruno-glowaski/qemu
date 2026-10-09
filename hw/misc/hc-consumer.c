@@ -444,6 +444,8 @@ static const TypeInfo hc_consumer_info = {
     .instance_size = sizeof(HCConsumer),
     .class_init = hc_consumer_class_init,
     .instance_init = hc_consumer_init,
+    .interfaces =
+        (const InterfaceInfo[]){{INTERFACE_CONVENTIONAL_PCI_DEVICE}, {}},
 };
 
 static void hc_consumer_type_init(void) {
