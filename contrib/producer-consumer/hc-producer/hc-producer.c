@@ -1,8 +1,11 @@
 #include <linux/module.h>
-
 #include <linux/ioctl.h>
 #include <linux/miscdevice.h>
 #include <linux/pci.h>
+#include <linux/interrupt.h>
+#include <linux/uaccess.h>
+#include <linux/mutex.h>
+#include <linux/wait.h>
 
 #include "../core/portable.h"
 #include "../core/transport.h"
@@ -40,7 +43,10 @@ typedef struct hc_producer_device {
   uint64_t shared_size;
 
   SPSCQueue *queue;
+
+  struct msix_entry msix_entry;
   int irq;
+  bool msix_enabled;
 
   struct mutex run_lock;
 } HCProducer;
@@ -250,28 +256,28 @@ static int hc_producer_probe(struct pci_dev *pdev,
   }
 
   /*
-   * Initialize IRQ
+   * Using the old MSI-X API for 4.4 compatibility.
    */
+  prod->msix_entry.entry = 0;
 
-  ret = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSIX);
+  ret = pci_enable_msix_range(pdev, &prod->msix_entry, 1, 1);
   if (ret < 0) {
-    dev_err(&pdev->dev, "failed to allocate irq vectors\n");
+    dev_err(&pdev->dev, "failed to enable MSI-X: %d\n", ret);
     return ret;
   }
-  prod->irq = pci_irq_vector(pdev, 0);
+
+  prod->msix_enabled = true;
+  prod->irq = prod->msix_entry.vector;
 
   ret = devm_request_irq(&pdev->dev, prod->irq, hc_irq, 0, "linux_hc_transport",
                          prod);
   if (ret) {
-    dev_err(&pdev->dev, "failed to request irq\n");
-    goto err_irq_vectors;
+    dev_err(&pdev->dev, "failed to request IRQ: %d\n", ret);
+    goto err_disable_msix;
   }
 
   dev_info(&pdev->dev, "IRQ=%d\n", prod->irq);
 
-  /*
-   * Register device
-   */
   prod->miscdev.minor = MISC_DYNAMIC_MINOR;
   prod->miscdev.name = "hc-producer";
   prod->miscdev.fops = &hc_producer_fops;
@@ -279,15 +285,20 @@ static int hc_producer_probe(struct pci_dev *pdev,
 
   ret = misc_register(&prod->miscdev);
   if (ret) {
-    dev_err(&pdev->dev, "failed to register device\n");
-    goto err_irq_vectors;
+    dev_err(&pdev->dev, "failed to register device: %d\n", ret);
+
+    devm_free_irq(&pdev->dev, prod->irq, prod);
+    goto err_disable_msix;
   }
 
   return 0;
 
-err_irq_vectors:
-  pci_free_irq_vectors(pdev);
-err:
+err_disable_msix:
+  if (prod->msix_enabled) {
+    pci_disable_msix(pdev);
+    prod->msix_enabled = false;
+  }
+
   return ret;
 }
 
@@ -299,7 +310,12 @@ static void hc_producer_remove(struct pci_dev *pdev) {
   mutex_lock(&prod->run_lock);
   mutex_unlock(&prod->run_lock);
 
-  pci_free_irq_vectors(pdev);
+  devm_free_irq(&pdev->dev, prod->irq, prod);
+
+  if (prod->msix_enabled) {
+    pci_disable_msix(pdev);
+    prod->msix_enabled = false;
+  }
 
   dev_info(&pdev->dev, "removed\n");
 }
