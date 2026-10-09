@@ -2,7 +2,7 @@
 #define PC_HC_COMMON_ABI_H
 
 #define HCC_VENDOR_ID 0x1b36
-#define HCC_DEVICE_ID 0x0001
+#define HCC_DEVICE_ID 0x0010
 
 #define HC_BAR_REGS 0
 #define HC_BAR_MSIX 1
