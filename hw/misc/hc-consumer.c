@@ -1,4 +1,3 @@
-#include "qemu/host-utils.h"
 #include "qemu/osdep.h"
 
 #include "glib.h"
@@ -8,6 +7,7 @@
 #include "hw/pci/msix.h"
 #include "hw/pci/pci_device.h"
 #include "hw/core/qdev-properties.h"
+#include "qemu/host-utils.h"
 #include "qemu/processor.h"
 #include "qemu/thread.h"
 #include "qemu/typedefs.h"
