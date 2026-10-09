@@ -298,7 +298,7 @@ err_disable_msix:
     pci_disable_msix(pdev);
     prod->msix_enabled = false;
   }
-
+err:
   return ret;
 }
 

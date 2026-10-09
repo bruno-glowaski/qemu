@@ -32,7 +32,7 @@ static const RuntimeOps linux_runtime_ops = {
     .is_interrupted = linux_runtime_is_interrupted,
 };
 
-declare_impl(LinuxRuntime, Runtime, &linux_runtime_ops);
+declare_impl(LinuxRuntime, Runtime, linux_runtime_ops);
 
 #endif // !__KERNEL__
 
