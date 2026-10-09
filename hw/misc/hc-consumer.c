@@ -1,3 +1,4 @@
+#include "qemu/host-utils.h"
 #include "qemu/osdep.h"
 
 #include "glib.h"
@@ -312,7 +313,7 @@ static void hc_consumer_realize(PCIDevice *pdev, Error **errp) {
    * Initialize memory regions
    */
 
-  cons->shared_size = ROUND_UP(calculate_spsc_queue_size(queue_len), 4096);
+  cons->shared_size = pow2ceil(calculate_spsc_queue_size(queue_len));
   memory_region_init_io(&cons->regs_mr, OBJECT(cons), &regs_mr_ops, cons,
                         "hc-consumer-mem-regs", HC_BAR_SIZE_REGS);
   memory_region_init(&cons->msix_mr, OBJECT(cons), "hc-consumer-mem-msix",
