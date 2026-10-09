@@ -409,7 +409,7 @@ static void hc_consumer_init(Object *obj) {
   cons->config.output_path = g_strdup("./output.csv");
 }
 
-static Property hc_consumer_properties[] = {
+static const Property hc_consumer_properties[] = {
     DEFINE_PROP_UINT64("event-len", HCConsumer, config.event_len, 1024),
     DEFINE_PROP_UINT64("queue-len", HCConsumer, config.queue_len, 1024),
     DEFINE_PROP_UINT64("work-cost", HCConsumer, config.costs.work, 3000),
