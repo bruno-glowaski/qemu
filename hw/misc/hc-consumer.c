@@ -20,7 +20,7 @@
 #include <string.h>
 #include <sys/poll.h>
 
-#define PC_LOG(fmt, ...) qemu_printf("[hc-consumer] " fmt "\n", __VA_ARGS__)
+#define PC_LOG(fmt, ...) qemu_printf("[hc-consumer] " fmt "\n", ##__VA_ARGS__)
 
 #include "contrib/producer-consumer/core/portable.h"
 #include "contrib/producer-consumer/core/spsc_queue.h"
