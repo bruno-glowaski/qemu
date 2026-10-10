@@ -82,6 +82,10 @@ static inline int run_producer(const ProducerInfo *info) {
     }
 
     work_start = read_tsc();
+    while ((work_end = read_tsc()) - work_start < costs.work) {
+      mbarrier();
+    }
+
     packet->consumer_events.work_start = work_start;
     packet->consumer_events.work_end = work_end;
     packet->consumer_events.yield_start = yield_start;
@@ -90,9 +94,17 @@ static inline int run_producer(const ProducerInfo *info) {
     packet->consumer_events.resume_end = resume_end;
     packet->consumer_events.notify_start = notify_start;
     packet->consumer_events.notify_end = notify_end;
-    while ((work_end = read_tsc()) - work_start < costs.work) {
-      mbarrier();
-    }
+
+#if 0
+    PC_PUSH_LOG("%ul-%ul; %ul-%Ul; %ul-%ul; %ul-%ul;",
+           packet->consumer_events.work_start, packet->consumer_events.work_end,
+           packet->consumer_events.yield_start,
+           packet->consumer_events.yield_end,
+           packet->consumer_events.resume_start,
+           packet->consumer_events.resume_end,
+           packet->consumer_events.notify_start,
+           packet->consumer_events.notify_end);
+#endif // DEBUG
 
     spsc_queue_commit_push(queue);
 
