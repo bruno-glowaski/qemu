@@ -96,7 +96,7 @@ static inline int run_producer(const ProducerInfo *info) {
     packet->consumer_events.notify_end = notify_end;
 
 #if 0
-    PC_PUSH_LOG("%ul-%ul; %ul-%Ul; %ul-%ul; %ul-%ul;",
+    PC_PUSH_LOG("%lu-%lu; %lu-%lu; %lu-%lu; %lu-%lu;",
            packet->consumer_events.work_start, packet->consumer_events.work_end,
            packet->consumer_events.yield_start,
            packet->consumer_events.yield_end,

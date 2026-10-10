@@ -115,7 +115,7 @@ static inline int run_consumer(const ConsumerInfo *info) {
     }
 
 #if 0
-    PC_POP_LOG("%ul-%ul; %ul-%Ul; %ul-%ul; %ul-%ul;",
+    PC_POP_LOG("%lu-%lu; %lu-%lu; %lu-%lu; %lu-%lu;",
            packet->consumer_events.work_start, packet->consumer_events.work_end,
            packet->consumer_events.yield_start,
            packet->consumer_events.yield_end,
