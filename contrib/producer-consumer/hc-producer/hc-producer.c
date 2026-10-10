@@ -7,7 +7,7 @@
 #include <linux/mutex.h>
 #include <linux/wait.h>
 
-#define PC_POP_LOG(fmt, ...) printk("[hc-producer] PUSH " fmt "\n", __VA_ARGS__)
+#define PC_PUSH(fmt, ...) printk("[hc-producer] PUSH " fmt "\n", __VA_ARGS__)
 
 #include "../core/portable.h"
 #include "../core/transport.h"
