@@ -20,11 +20,7 @@
 #include <string.h>
 #include <sys/poll.h>
 
-#define PC_BARRIER_START_LOG(fmt, ...)                                         \
-  qemu_printf("[hc-consumer] BARRIER START\n")
-#define PC_BARRIER_END_LOG(fmt, ...) qemu_printf("[hc-consumer] BARRIER END\n")
-#define PC_POP_LOG(fmt, ...)                                                   \
-  qemu_printf("[hc-consumer] POP " fmt "\n", __VA_ARGS__)
+#define PC_LOG(fmt, ...) qemu_printf("[hc-consumer] " fmt "\n", __VA_ARGS__)
 
 #include "contrib/producer-consumer/core/portable.h"
 #include "contrib/producer-consumer/core/spsc_queue.h"

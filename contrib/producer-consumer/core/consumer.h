@@ -54,14 +54,14 @@ static inline int run_consumer(const ConsumerInfo *info) {
   runtime.ops->fix_hart(runtime);
 
 #ifdef PC_LOG
-  PC_BARRIER_START_LOG();
+  PC_LOG("BARRIER START");
 #endif // PC_LOG
   res = transport.ops->ready_barrier_wait(transport);
   if (res != 0) {
     goto end;
   }
 #ifdef PC_LOG
-  PC_BARRIER_END_LOG();
+  PC_LOG("BARRIER END");
 #endif // PC_LOG
 
   for (;;) {
@@ -95,7 +95,13 @@ static inline int run_consumer(const ConsumerInfo *info) {
           break;
         }
 
+#ifdef PC_LOG
+        PC_LOG("WAIT_UNTIL START");
+#endif // PC_LOG
         res = transport.ops->wait_until(transport);
+#ifdef PC_LOG
+        PC_LOG("WAIT_UNTIL END");
+#endif // PC_LOG
         if (res != 0) {
           goto end;
         }
@@ -121,14 +127,14 @@ static inline int run_consumer(const ConsumerInfo *info) {
     }
 
 #ifdef PC_LOG
-    PC_POP_LOG(
-        "%lu-%lu; %lu-%lu; %lu-%lu; %lu-%lu;",
-        packet->consumer_events.work_start, packet->consumer_events.work_end,
-        packet->consumer_events.yield_start, packet->consumer_events.yield_end,
-        packet->consumer_events.resume_start,
-        packet->consumer_events.resume_end,
-        packet->consumer_events.notify_start,
-        packet->consumer_events.notify_end);
+    PC_LOG("POP %lu-%lu; %lu-%lu; %lu-%lu; %lu-%lu;",
+           packet->consumer_events.work_start, packet->consumer_events.work_end,
+           packet->consumer_events.yield_start,
+           packet->consumer_events.yield_end,
+           packet->consumer_events.resume_start,
+           packet->consumer_events.resume_end,
+           packet->consumer_events.notify_start,
+           packet->consumer_events.notify_end);
 #endif // PC_LOG
     event_buffer_push(events, (PerPacketEvents){
                                   .consumer = packet->consumer_events,
