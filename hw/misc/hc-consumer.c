@@ -9,6 +9,7 @@
 #include "hw/core/qdev-properties.h"
 #include "qemu/host-utils.h"
 #include "qemu/processor.h"
+#include "qemu/qemu-print.h"
 #include "qemu/thread.h"
 #include "qemu/typedefs.h"
 #include "qom/object.h"
