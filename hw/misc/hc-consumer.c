@@ -348,6 +348,8 @@ static void hc_consumer_realize(PCIDevice *pdev, Error **errp) {
     goto err_del_eventfds;
   }
   msix_vector_use(pdev, 0);
+  pci_register_bar(pdev, HC_BAR_MSIX, PCI_BASE_ADDRESS_SPACE_MEMORY,
+                   &cons->msix_mr);
   pci_register_bar(pdev, HC_BAR_SHARED,
                    PCI_BASE_ADDRESS_SPACE_MEMORY |
                        PCI_BASE_ADDRESS_MEM_PREFETCH,
