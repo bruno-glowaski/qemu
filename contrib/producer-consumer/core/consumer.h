@@ -53,10 +53,16 @@ static inline int run_consumer(const ConsumerInfo *info) {
 
   runtime.ops->fix_hart(runtime);
 
+#ifdef PC_LOG
+  PC_BARRIER_START_LOG();
+#endif // PC_LOG
   res = transport.ops->ready_barrier_wait(transport);
   if (res != 0) {
     goto end;
   }
+#ifdef PC_LOG
+  PC_BARRIER_END_LOG();
+#endif // PC_LOG
 
   for (;;) {
     if (event_buffer_is_filled(events)) {
@@ -114,16 +120,16 @@ static inline int run_consumer(const ConsumerInfo *info) {
       mbarrier();
     }
 
-#if 0
-    PC_POP_LOG("%lu-%lu; %lu-%lu; %lu-%lu; %lu-%lu;",
-           packet->consumer_events.work_start, packet->consumer_events.work_end,
-           packet->consumer_events.yield_start,
-           packet->consumer_events.yield_end,
-           packet->consumer_events.resume_start,
-           packet->consumer_events.resume_end,
-           packet->consumer_events.notify_start,
-           packet->consumer_events.notify_end);
-#endif // DEBUG
+#ifdef PC_LOG
+    PC_POP_LOG(
+        "%lu-%lu; %lu-%lu; %lu-%lu; %lu-%lu;",
+        packet->consumer_events.work_start, packet->consumer_events.work_end,
+        packet->consumer_events.yield_start, packet->consumer_events.yield_end,
+        packet->consumer_events.resume_start,
+        packet->consumer_events.resume_end,
+        packet->consumer_events.notify_start,
+        packet->consumer_events.notify_end);
+#endif // PC_LOG
     event_buffer_push(events, (PerPacketEvents){
                                   .consumer = packet->consumer_events,
                                   .producer =

@@ -7,6 +7,8 @@
 #include <linux/mutex.h>
 #include <linux/wait.h>
 
+#define PC_BARRIER_START_LOG(fmt, ...) printk("[hc-consumer] BARRIER START\n")
+#define PC_BARRIER_END_LOG(fmt, ...) printk("[hc-consumer] BARRIER END\n")
 #define PC_PUSH(fmt, ...) printk("[hc-producer] PUSH " fmt "\n", __VA_ARGS__)
 
 #include "../core/portable.h"

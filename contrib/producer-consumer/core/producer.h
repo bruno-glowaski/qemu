@@ -29,10 +29,16 @@ static inline int run_producer(const ProducerInfo *info) {
 
   runtime.ops->fix_hart(runtime);
 
+#ifdef PC_LOG
+  PC_BARRIER_START_LOG();
+#endif // PC_LOG
   res = transport.ops->ready_barrier_wait(transport);
   if (res != 0) {
     goto end;
   }
+#ifdef PC_LOG
+  PC_BARRIER_END_LOG();
+#endif // PC_LOG
 
   for (;;) {
     if (runtime.ops->is_interrupted(AsRuntimeConst(runtime))) {
