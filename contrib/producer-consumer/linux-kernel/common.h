@@ -24,7 +24,7 @@ static void linux_runtime_fix_hart(RuntimeMut self) {
   put_cpu();
 
   if (ret)
-    do_exit(SIGKILL);
+    panic("[pc/common] couldn't fix hart");
 }
 
 static const RuntimeOps linux_runtime_ops = {

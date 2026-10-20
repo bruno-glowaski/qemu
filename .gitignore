@@ -20,3 +20,7 @@ GTAGS
 *.swp
 *.patch
 *.gcov
+
+seed.img
+ubuntu-base.img
+ubuntu-dev.qcow2

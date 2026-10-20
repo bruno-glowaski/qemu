@@ -69,6 +69,7 @@ static SPSCQueue *hc_producer_get_queue(TransportConst self) {
 
 static int hc_producer_wait_ready_barrier(TransportMut self) {
   const HCProducer *prod = self.data;
+  writel(HC_SIDE_STATUS_READY, prod->regs + HC_REG_PROD_STATUS);
   for (;;) {
     if (readl(prod->regs + HC_REG_CONS_STATUS) != HC_SIDE_STATUS_PENDING) {
       return 0;

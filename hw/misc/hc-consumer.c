@@ -108,11 +108,11 @@ static int hc_consumer_ready_barrier_wait(TransportMut self) {
   HCConsumer *cons = self.data;
   au32_store_release(&cons->cons_status, HC_SIDE_STATUS_READY);
   for (;;) {
-    if (au32_load_acquire(&cons->prod_status) == HC_SIDE_STATUS_READY) {
+    if (au32_load_acquire(&cons->prod_status) == HC_SIDE_STATUS_PENDING) {
       return 0;
     }
     if (au32_load_acquire(&cons->cons_status) == HC_SIDE_STATUS_CLOSED) {
-      return CRCLOSED;
+      return CRINTERRUPTED;
     }
     cpu_relax();
   }
