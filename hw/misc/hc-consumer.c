@@ -250,6 +250,29 @@ static void *consume(void *opaque) {
   };
 
   res = run_consumer(&info);
+
+  int fd =
+      qemu_create(cons->config.output_path, O_WRONLY | O_TRUNC, 0644, NULL);
+  if (fd < 0) {
+    error_report("failed to create output file: %s", strerror(errno));
+    goto skip_output;
+  }
+
+  for (uint64_t i = 0; i < cons->events.len; i++) {
+    PerPacketEvents event = cons->events.data[i];
+    dprintf(fd,
+            "%lu,%lu,%lu,%lu,%lu,%lu,"
+            "%lu,%lu,%lu,%lu,%lu,%lu\n",
+            event.producer.yield_start, event.producer.yield_end,
+            event.producer.work_start, event.producer.work_end,
+            event.producer.notify_start, event.producer.notify_end,
+            event.consumer.yield_start, event.consumer.yield_end,
+            event.consumer.work_start, event.consumer.work_end,
+            event.consumer.notify_start, event.consumer.notify_end);
+  }
+  close(fd);
+
+skip_output:
   switch (res) {
   case CREND:
     info_report("hc-consumer: event buffer was successfuly filled");
@@ -385,28 +408,6 @@ static void hc_consumer_unrealize(PCIDevice *pdev) {
 
   msix_vector_unuse(pdev, 0);
   msix_uninit(pdev, &cons->msix_mr, &cons->msix_mr);
-
-  int fd =
-      qemu_open(cons->config.output_path, O_WRONLY | O_CREAT | O_TRUNC, NULL);
-  if (fd < 0) {
-    error_report("failed to create output file: %s", strerror(errno));
-    goto skip_output;
-  }
-
-  for (uint64_t i = 0; i < cons->events.len; i++) {
-    PerPacketEvents event = cons->events.data[i];
-    dprintf(fd,
-            "%lu,%lu,%lu,%lu,%lu,%lu"
-            "%lu,%lu,%lu,%lu,%lu,%lu\n",
-            event.producer.yield_start, event.producer.yield_end,
-            event.producer.work_start, event.producer.work_end,
-            event.producer.notify_start, event.producer.notify_end,
-            event.consumer.yield_start, event.consumer.yield_end,
-            event.consumer.work_start, event.consumer.work_end,
-            event.consumer.notify_start, event.consumer.notify_end);
-  }
-  close(fd);
-skip_output:
   g_free(cons->events.data);
 }
 

@@ -24,3 +24,4 @@ GTAGS
 seed.img
 ubuntu-base.img
 ubuntu-dev.qcow2
+output.csv
