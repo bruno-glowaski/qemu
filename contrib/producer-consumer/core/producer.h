@@ -98,24 +98,24 @@ static inline int run_producer(const ProducerInfo *info) {
       mbarrier();
     }
 
-    packet->consumer_events.work_start = work_start;
-    packet->consumer_events.work_end = work_end;
-    packet->consumer_events.yield_start = yield_start;
-    packet->consumer_events.yield_end = yield_end;
-    packet->consumer_events.resume_start = resume_start;
-    packet->consumer_events.resume_end = resume_end;
-    packet->consumer_events.notify_start = notify_start;
-    packet->consumer_events.notify_end = notify_end;
+    packet->producer_events.work_start = work_start;
+    packet->producer_events.work_end = work_end;
+    packet->producer_events.yield_start = yield_start;
+    packet->producer_events.yield_end = yield_end;
+    packet->producer_events.resume_start = resume_start;
+    packet->producer_events.resume_end = resume_end;
+    packet->producer_events.notify_start = notify_start;
+    packet->producer_events.notify_end = notify_end;
 
 #if 0
     PC_LOG("PUSH %lu-%lu; %lu-%lu; %lu-%lu; %lu-%lu;",
-           packet->consumer_events.work_start, packet->consumer_events.work_end,
-           packet->consumer_events.yield_start,
-           packet->consumer_events.yield_end,
-           packet->consumer_events.resume_start,
-           packet->consumer_events.resume_end,
-           packet->consumer_events.notify_start,
-           packet->consumer_events.notify_end);
+           packet->producer_events.work_start, packet->producer_events.work_end,
+           packet->producer_events.yield_start,
+           packet->producer_events.yield_end,
+           packet->producer_events.resume_start,
+           packet->producer_events.resume_end,
+           packet->producer_events.notify_start,
+           packet->producer_events.notify_end);
 #endif // DEBUG
 
     spsc_queue_commit_push(queue);

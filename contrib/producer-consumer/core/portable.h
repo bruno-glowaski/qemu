@@ -139,10 +139,16 @@ static inline tsc_t read_tsc() { rdtsc(); }
 
 #define mbarrier() __asm__ __volatile__("" : : : "memory")
 
-static inline tsc_t read_tsc(void) {
-  uint32_t hi, lo;
-  __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
-  return (uint64_t)lo | ((uint64_t)hi << 32);
+static inline uint64_t read_tsc(void) {
+  uint32_t lo, hi;
+
+  __asm__ __volatile__("lfence\n\t"
+                       "rdtsc"
+                       : "=a"(lo), "=d"(hi)
+                       :
+                       : "memory");
+
+  return ((uint64_t)hi << 32) | lo;
 }
 
 #endif // KERNEL

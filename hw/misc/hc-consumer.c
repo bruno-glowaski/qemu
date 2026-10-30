@@ -14,13 +14,26 @@
 #include "qemu/typedefs.h"
 #include "qom/object.h"
 #include "standard-headers/linux/pci_regs.h"
+#include "system/kvm.h"
 #include "system/memory.h"
+#include "hw/core/cpu.h"
 
+#include <linux/kvm.h>
 #include <sched.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/poll.h>
+#include <sys/ioctl.h>
 
-#define PC_LOG(fmt, ...) qemu_printf("[hc-consumer] " fmt "\n", ##__VA_ARGS__)
+/*
+ * Comment/Uncomment to toggle debugging. Causes delays and may ruin
+ * measurements.
+ */
+
+/*
+ * #define PC_LOG(fmt, ...) qemu_printf("[hc-consumer] " fmt "\n", \
+ * ##__VA_ARGS__)
+ */
 
 #include "contrib/producer-consumer/core/portable.h"
 #include "contrib/producer-consumer/core/spsc_queue.h"
@@ -238,6 +251,16 @@ static const MemoryRegionOps regs_mr_ops = {
     .valid = {.min_access_size = 4, .max_access_size = 8},
 };
 
+static int get_tsc_info_for(CPUState *cpu, uint64_t *offset) {
+  struct kvm_device_attr attr_offset = {
+      .group = KVM_VCPU_TSC_CTRL,
+      .attr = KVM_VCPU_TSC_OFFSET,
+      .addr = (uint64_t)(uintptr_t)offset,
+  };
+
+  return kvm_vcpu_ioctl(cpu, KVM_GET_DEVICE_ATTR, &attr_offset);
+}
+
 static void *consume(void *opaque) {
   int res;
   HCConsumer *cons = opaque;
@@ -257,16 +280,35 @@ static void *consume(void *opaque) {
     error_report("failed to create output file: %s", strerror(errno));
     goto skip_output;
   }
+  uint64_t tsc_offset;
+  res = get_tsc_info_for(first_cpu, &tsc_offset);
+  if (res < 0) {
+    error_report("failed to read tsc info: %s", strerror(res));
+    goto skip_output;
+  }
 
+  info_report("hc-consumer: tsc info (offset: %lu)", tsc_offset);
   for (uint64_t i = 0; i < cons->events.len; i++) {
     PerPacketEvents event = cons->events.data[i];
+
+    event.producer.yield_start -= tsc_offset;
+    event.producer.yield_end -= tsc_offset;
+    event.producer.resume_start -= tsc_offset;
+    event.producer.resume_end -= tsc_offset;
+    event.producer.work_start -= tsc_offset;
+    event.producer.work_end -= tsc_offset;
+    event.producer.notify_start -= tsc_offset;
+    event.producer.notify_end -= tsc_offset;
+
     dprintf(fd,
-            "%lu,%lu,%lu,%lu,%lu,%lu,"
-            "%lu,%lu,%lu,%lu,%lu,%lu\n",
+            "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,"
+            "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n",
             event.producer.yield_start, event.producer.yield_end,
+            event.producer.resume_start, event.producer.resume_end,
             event.producer.work_start, event.producer.work_end,
             event.producer.notify_start, event.producer.notify_end,
             event.consumer.yield_start, event.consumer.yield_end,
+            event.consumer.resume_start, event.consumer.resume_end,
             event.consumer.work_start, event.consumer.work_end,
             event.consumer.notify_start, event.consumer.notify_end);
   }

@@ -7,7 +7,14 @@
 #include <linux/mutex.h>
 #include <linux/wait.h>
 
-#define PC_LOG(fmt, ...) printk("[hc-producer] " fmt "\n", ##__VA_ARGS__)
+/*
+ * Comment/Uncomment to toggle debugging. Causes delays and may ruin
+ * measurements.
+ */
+
+/*
+ * #define PC_LOG(fmt, ...) printk("[hc-producer] " fmt "\n", ##__VA_ARGS__)
+ */
 
 #include "../core/portable.h"
 #include "../core/transport.h"

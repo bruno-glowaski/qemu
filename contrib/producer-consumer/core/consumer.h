@@ -128,17 +128,17 @@ static inline int run_consumer(const ConsumerInfo *info) {
 
 #ifdef PC_LOG
     PC_LOG("POP %lu-%lu; %lu-%lu; %lu-%lu; %lu-%lu;",
-           packet->consumer_events.work_start, packet->consumer_events.work_end,
-           packet->consumer_events.yield_start,
-           packet->consumer_events.yield_end,
-           packet->consumer_events.resume_start,
-           packet->consumer_events.resume_end,
-           packet->consumer_events.notify_start,
-           packet->consumer_events.notify_end);
+           packet->producer_events.work_start, packet->producer_events.work_end,
+           packet->producer_events.yield_start,
+           packet->producer_events.yield_end,
+           packet->producer_events.resume_start,
+           packet->producer_events.resume_end,
+           packet->producer_events.notify_start,
+           packet->producer_events.notify_end);
 #endif // PC_LOG
     event_buffer_push(events, (PerPacketEvents){
-                                  .consumer = packet->consumer_events,
-                                  .producer =
+                                  .producer = packet->producer_events,
+                                  .consumer =
                                       (PerSideEvents){
                                           .yield_start = yield_start,
                                           .yield_end = yield_end,

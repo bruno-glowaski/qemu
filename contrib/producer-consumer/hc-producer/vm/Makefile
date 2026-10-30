@@ -25,9 +25,12 @@ run: all
 	    -b "$(BASE)" "$(DISK)" 30G; \
 	fi
 	$(QEMU) \
-	  -machine accel=kvm:tcg -enable-kvm -cpu host -m 2048 -smp 2 \
+          -machine q35,accel=kvm \
+	  -enable-kvm \
+	  -cpu host,tsc-frequency=3792873000 \
+	  -m 2048 \
+	  -smp 2 \
           -device hc-consumer \
-          -rtc base=localtime,clock=host \
 	  -net user -net nic \
 	  -global isa-fdc.fdtypeA=none \
 	  -drive file="$(DISK)",index=0,if=virtio,format=qcow2,media=disk \

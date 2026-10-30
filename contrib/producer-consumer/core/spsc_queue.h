@@ -8,7 +8,7 @@
 
 /// A work packet
 typedef struct {
-  PerSideEvents consumer_events;
+  PerSideEvents producer_events;
   unsigned char _padding[CACHE_LINE_SIZE - sizeof(PerSideEvents)];
 } Packet;
 _Static_assert(sizeof(Packet) == CACHE_LINE_SIZE,
